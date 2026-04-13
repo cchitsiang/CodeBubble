@@ -10,6 +10,10 @@
   <a href="#build-from-source">Build</a>
 </p>
 
+<p align="center">
+  <img src="docs/images/screenshot.png" width="620" alt="CodeBubble session list panel showing Claude, Codex, and OpenCode sessions">
+</p>
+
 ---
 
 ## What is CodeBubble?
