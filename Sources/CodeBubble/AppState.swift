@@ -1,0 +1,521 @@
+import SwiftUI
+import os.log
+import CodeBubbleCore
+
+private let log = Logger(subsystem: "com.codebubble", category: "AppState")
+
+@MainActor
+@Observable
+final class AppState {
+    var sessions: [String: SessionSnapshot] = [:]
+    var activeSessionId: String?
+    var surface: IslandSurface = .collapsed
+    /// Queue of pending hook-based approvals (interactive). Head item is shown in ApprovalBar.
+    var hookApprovalQueue: [HookApproval] = []
+
+    var justCompletedSessionId: String? {
+        if case .completionCard(let id) = surface { return id }
+        return nil
+    }
+
+    /// First-in-line interactive approval (if any).
+    var pendingHookApproval: HookApproval? { hookApprovalQueue.first }
+
+    private var cleanupTimer: Timer?
+    private var autoCollapseTask: Task<Void, Never>?
+    private var completionQueue: [String] = []
+    /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
+    var completionHasBeenEntered = false
+    private var isShowingCompletion: Bool {
+        if case .completionCard = surface { return true }
+        return false
+    }
+
+    var rotatingSessionId: String?
+    var rotatingSession: SessionSnapshot? {
+        guard let rid = rotatingSessionId else { return nil }
+        return sessions[rid]
+    }
+    private var rotationTimer: Timer?
+
+    // Cached derived state (refreshed by refreshDerivedState after session mutations)
+    private(set) var status: AgentStatus = .idle
+    private(set) var primarySource: String = "claude"
+    private(set) var activeSessionCount: Int = 0
+    private(set) var totalSessionCount: Int = 0
+
+    // MARK: - Cleanup Timer
+
+    private func startCleanupTimer() {
+        guard cleanupTimer == nil else { return }
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.cleanupIdleSessions()
+            }
+        }
+    }
+
+    private func cleanupIdleSessions() {
+        // With provider-driven polling, session lifecycle is managed by providers:
+        // sessions only exist while their process is running. No timeout-based
+        // cleanup is needed — providers stop reporting sessions when processes exit,
+        // and updateFromProviders() removes them immediately.
+        startRotationIfNeeded()
+        refreshDerivedState()
+    }
+
+    // MARK: - Session Removal
+
+    /// Remove a session and clean up UI state.
+    func removeSession(_ sessionId: String) {
+        if surface.sessionId == sessionId {
+            autoCollapseTask?.cancel()
+            if case .completionCard = surface {
+                if !showNextPending() {
+                    showNextCompletionOrCollapse()
+                }
+            } else {
+                _ = showNextPending()
+            }
+        }
+        sessions.removeValue(forKey: sessionId)
+        completionQueue.removeAll { $0 == sessionId }
+        if activeSessionId == sessionId {
+            activeSessionId = mostActiveSessionId()
+        }
+        startRotationIfNeeded()
+        refreshDerivedState()
+    }
+
+    // MARK: - Compact bar mascot rotation
+
+    /// Cached sorted active session IDs — refreshed by refreshActiveIds()
+    private var cachedActiveIds: [String] = []
+
+    private func refreshActiveIds() {
+        cachedActiveIds = sessions
+            .filter { $0.value.status != .idle }
+            .sorted { a, b in
+                let pa = statusPriority(a.value.status)
+                let pb = statusPriority(b.value.status)
+                if pa != pb { return pa > pb }
+                return a.value.lastActivity > b.value.lastActivity
+            }
+            .map(\.key)
+    }
+
+    /// Higher = more urgent, shown first in rotation
+    private func statusPriority(_ status: AgentStatus) -> Int {
+        switch status {
+        case .waitingForUser: return 4
+        case .running:        return 3
+        case .thinking:       return 2
+        case .idle:           return 0
+        }
+    }
+
+    private func startRotationIfNeeded() {
+        refreshActiveIds()
+        if cachedActiveIds.count > 1 {
+            if let top = cachedActiveIds.first, top != rotatingSessionId {
+                let topStatus = sessions[top]?.status ?? .idle
+                let currentStatus = rotatingSessionId.flatMap { sessions[$0]?.status } ?? .idle
+                if statusPriority(topStatus) > statusPriority(currentStatus) {
+                    rotatingSessionId = top
+                }
+            }
+            if rotatingSessionId == nil || !cachedActiveIds.contains(rotatingSessionId!) {
+                rotatingSessionId = cachedActiveIds.first
+            }
+            if rotationTimer == nil {
+                let interval = TimeInterval(max(1, SettingsManager.shared.rotationInterval))
+                rotationTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+                    Task { @MainActor in
+                        self?.rotateToNextSession()
+                    }
+                }
+            }
+        } else {
+            rotationTimer?.invalidate()
+            rotationTimer = nil
+            rotatingSessionId = nil
+            if let active = cachedActiveIds.first,
+               activeSessionId != active {
+                activeSessionId = active
+            }
+        }
+    }
+
+    private func rotateToNextSession() {
+        guard cachedActiveIds.count > 1 else {
+            rotatingSessionId = nil
+            return
+        }
+        if let current = rotatingSessionId, let idx = cachedActiveIds.firstIndex(of: current) {
+            rotatingSessionId = cachedActiveIds[(idx + 1) % cachedActiveIds.count]
+        } else {
+            rotatingSessionId = cachedActiveIds.first
+        }
+    }
+
+    // MARK: - Completion Queue
+
+    private func enqueueCompletion(_ sessionId: String) {
+        if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
+
+        if isShowingCompletion {
+            completionQueue.append(sessionId)
+        } else {
+            showCompletion(sessionId)
+        }
+    }
+
+    private func showCompletion(_ sessionId: String) {
+        doShowCompletion(sessionId)
+    }
+
+    private func doShowCompletion(_ sessionId: String) {
+        activeSessionId = sessionId
+        surface = .completionCard(sessionId: sessionId)
+        completionHasBeenEntered = false
+
+        autoCollapseTask?.cancel()
+        autoCollapseTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 5_000_000_000)
+            guard !Task.isCancelled else { return }
+            showNextCompletionOrCollapse()
+        }
+    }
+
+    func cancelCompletionQueue() {
+        autoCollapseTask?.cancel()
+        completionQueue.removeAll()
+    }
+
+    private func showNextCompletionOrCollapse() {
+        if showNextPending() { return }
+        withAnimation(NotchAnimation.close) {
+            surface = .collapsed
+        }
+    }
+
+    // MARK: - Derived State
+
+    var currentTool: String? {
+        guard let id = activeSessionId, let s = sessions[id] else { return nil }
+        return s.currentTool
+    }
+
+    var toolDescription: String? {
+        guard let id = activeSessionId, let s = sessions[id] else { return nil }
+        return s.toolDescription
+    }
+
+    var activeDisplayName: String? {
+        guard let id = activeSessionId, let s = sessions[id] else { return nil }
+        return s.projectDisplayName ?? id
+    }
+
+    var activeModel: String? {
+        guard let id = activeSessionId, let s = sessions[id] else { return nil }
+        return s.model
+    }
+
+    /// Recompute cached status/source/counts from sessions in a single O(n) pass.
+    private func refreshDerivedState() {
+        let summary = deriveSessionSummary(from: sessions)
+        if status != summary.status { status = summary.status }
+        if primarySource != summary.primarySource { primarySource = summary.primarySource }
+        if activeSessionCount != summary.activeSessionCount { activeSessionCount = summary.activeSessionCount }
+        if totalSessionCount != summary.totalSessionCount { totalSessionCount = summary.totalSessionCount }
+    }
+
+    /// After dequeuing, show next pending item or collapse
+    @discardableResult
+    private func showNextPending() -> Bool {
+        if !completionQueue.isEmpty {
+            while let next = completionQueue.first {
+                completionQueue.removeFirst()
+                if sessions[next] != nil {
+                    withAnimation(NotchAnimation.pop) { doShowCompletion(next) }
+                    return true
+                }
+            }
+            return false
+        }
+        return false
+    }
+
+    /// Find the most recently active non-idle session
+    private func mostActiveSessionId() -> String? {
+        sessions.max { a, b in
+            let pa = statusPriority(a.value.status)
+            let pb = statusPriority(b.value.status)
+            if pa != pb { return pa < pb }
+            return a.value.lastActivity < b.value.lastActivity
+        }?.key
+    }
+
+    // MARK: - Hook-Based Approvals (Interactive)
+
+    /// Enqueue a new approval request from the hook socket.
+    /// Called by HookSocketServer when Claude Code fires a PermissionRequest hook.
+    func enqueueHookApproval(
+        sessionId: String,
+        toolName: String,
+        toolInput: [String: Any],
+        continuation: CheckedContinuation<Data, Never>
+    ) {
+        let approval = HookApproval(
+            sessionId: sessionId,
+            toolName: toolName,
+            toolInput: toolInput,
+            continuation: continuation
+        )
+        hookApprovalQueue.append(approval)
+
+        // Surface approval card and update active session
+        surface = .approvalCard(sessionId: sessionId)
+        activeSessionId = sessionId
+        SoundManager.shared.handleEvent("PermissionRequest")
+
+        // Reflect in session state
+        sessions[sessionId]?.status = .waitingForUser
+        sessions[sessionId]?.pendingApprovalTool = toolName
+        sessions[sessionId]?.pendingApprovalDetail = Self.describePendingTool(name: toolName, input: toolInput)
+        refreshDerivedState()
+    }
+
+    /// Approve the head of the queue (once). Sends behavior=allow back to Claude Code.
+    func approveHookApproval(always: Bool = false) {
+        guard !hookApprovalQueue.isEmpty else { return }
+        let head = hookApprovalQueue.removeFirst()
+
+        let response: [String: Any]
+        if always {
+            response = [
+                "hookSpecificOutput": [
+                    "hookEventName": "PermissionRequest",
+                    "decision": [
+                        "behavior": "allow",
+                        "updatedPermissions": [
+                            ["behavior": "allow", "tool": head.toolName, "scope": "session"]
+                        ]
+                    ]
+                ]
+            ]
+        } else {
+            response = [
+                "hookSpecificOutput": [
+                    "hookEventName": "PermissionRequest",
+                    "decision": ["behavior": "allow"]
+                ]
+            ]
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: response) {
+            head.continuation.resume(returning: data)
+        } else {
+            head.continuation.resume(returning: Data("{}".utf8))
+        }
+
+        clearPendingApproval(for: head.sessionId)
+        showNextApprovalOrCollapse()
+    }
+
+    /// Deny the head of the queue.
+    func denyHookApproval() {
+        guard !hookApprovalQueue.isEmpty else { return }
+        let head = hookApprovalQueue.removeFirst()
+
+        let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#
+        head.continuation.resume(returning: Data(response.utf8))
+
+        clearPendingApproval(for: head.sessionId)
+        showNextApprovalOrCollapse()
+    }
+
+    private func clearPendingApproval(for sessionId: String) {
+        // Only clear session's pending info if no other approval exists for this session
+        let stillPending = hookApprovalQueue.contains { $0.sessionId == sessionId }
+        if !stillPending {
+            sessions[sessionId]?.pendingApprovalTool = nil
+            sessions[sessionId]?.pendingApprovalDetail = nil
+        }
+    }
+
+    private func showNextApprovalOrCollapse() {
+        if let next = hookApprovalQueue.first {
+            surface = .approvalCard(sessionId: next.sessionId)
+            activeSessionId = next.sessionId
+        } else {
+            surface = .collapsed
+        }
+        refreshDerivedState()
+    }
+
+    /// Build a short human-readable description of a tool invocation for the approval UI.
+    private static func describePendingTool(name: String, input: [String: Any]) -> String? {
+        switch name {
+        case "Bash":
+            return input["command"] as? String
+        case "Edit", "Write", "Read", "NotebookEdit":
+            return input["file_path"] as? String
+        case "Grep":
+            if let pattern = input["pattern"] as? String {
+                if let path = input["path"] as? String {
+                    return "\(pattern)  in  \(path)"
+                }
+                return pattern
+            }
+        case "Glob":
+            return input["pattern"] as? String
+        case "WebFetch":
+            return input["url"] as? String
+        case "WebSearch":
+            return input["query"] as? String
+        case "AskUserQuestion":
+            return input["question"] as? String
+        default:
+            for key in input.keys.sorted() {
+                if let v = input[key] as? String, !v.isEmpty { return v }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Provider-Driven Updates
+
+    /// Called by SessionMonitor on each poll cycle with fresh provider data.
+    func updateFromProviders(_ agentSessions: [AgentSession]) {
+        var updatedIds: Set<String> = []
+
+        for session in agentSessions {
+            updatedIds.insert(session.id)
+
+            let isNew = sessions[session.id] == nil
+            if isNew {
+                sessions[session.id] = SessionSnapshot(startTime: session.lastActivity)
+                SoundManager.shared.handleEvent("SessionStart")
+            }
+
+            let status: AgentStatus
+            switch session.activity {
+            case .thinking: status = .thinking
+            case .executingTool: status = .running
+            case .waitingForUser: status = .waitingForUser
+            case .idle: status = .idle
+            }
+
+            // Detect transitions to idle (completion) for notification
+            let previousStatus = sessions[session.id]?.status
+            let wasActive = previousStatus != nil && previousStatus != .idle
+
+            // If hook has a pending approval for this session, it's authoritative —
+            // don't let provider polling overwrite the waiting state or pending tool info.
+            let hasHookApproval = hookApprovalQueue.contains { $0.sessionId == session.id }
+
+            if hasHookApproval {
+                sessions[session.id]?.status = .waitingForUser
+            } else {
+                sessions[session.id]?.status = status
+                sessions[session.id]?.pendingApprovalTool = session.pendingApprovalTool
+                sessions[session.id]?.pendingApprovalDetail = session.pendingApprovalDetail
+            }
+
+            sessions[session.id]?.currentTool = session.currentTool
+            sessions[session.id]?.toolDescription = session.toolDescription
+            sessions[session.id]?.lastActivity = session.lastActivity
+            sessions[session.id]?.cwd = session.cwd
+            sessions[session.id]?.model = session.model
+            sessions[session.id]?.gitBranch = session.gitBranch
+            sessions[session.id]?.source = session.source
+
+            if let prompt = session.lastUserPrompt {
+                sessions[session.id]?.lastUserPrompt = prompt
+            }
+            if let msg = session.lastAssistantMessage {
+                sessions[session.id]?.lastAssistantMessage = msg
+            }
+
+            // Play sound on transition into waitingForUser (JSONL-detected).
+            // We deliberately do NOT auto-surface the approval card here — the hook
+            // (via enqueueHookApproval) is authoritative for popping up the approval
+            // UI. If no hook is installed, the user can tap the card in the session
+            // list to see the read-only ApprovalBar.
+            let becameWaiting = previousStatus != .waitingForUser && status == .waitingForUser
+            if becameWaiting, session.pendingApprovalTool != nil {
+                SoundManager.shared.handleEvent("PermissionRequest")
+            }
+
+            // Enqueue completion card when session transitions to idle
+            if wasActive && status == .idle {
+                enqueueCompletion(session.id)
+            }
+        }
+
+        // Remove sessions no longer reported by any provider.
+        // Providers only return sessions with live processes, so if a session
+        // disappears from the provider list, the process has exited.
+        let staleIds = Set(sessions.keys).subtracting(updatedIds)
+        for id in staleIds {
+            sessions.removeValue(forKey: id)
+        }
+
+        // Update active session
+        if activeSessionId == nil || sessions[activeSessionId ?? ""] == nil {
+            activeSessionId = sessions.keys.sorted { a, b in
+                (sessions[a]?.lastActivity ?? .distantPast) > (sessions[b]?.lastActivity ?? .distantPast)
+            }.first
+        }
+
+        // Surface the approval card whenever any session is pending approval.
+        // If currently on approvalCard for a session that's no longer waiting, revert.
+        reconcileApprovalSurface()
+
+        startRotationIfNeeded()
+        refreshDerivedState()
+    }
+
+    /// Session ID with highest priority pending approval.
+    /// Hook-based queue is authoritative (real interactive approval); falls back
+    /// to JSONL-detected waitingForUser sessions (read-only).
+    var pendingApprovalSessionId: String? {
+        if let head = hookApprovalQueue.first {
+            return head.sessionId
+        }
+        return sessions
+            .filter { $0.value.status == .waitingForUser && $0.value.pendingApprovalTool != nil }
+            .max { a, b in a.value.lastActivity < b.value.lastActivity }?
+            .key
+    }
+
+    /// If currently showing an approvalCard for a session that's no longer waiting,
+    /// move to the next pending approval or collapse. Does NOT auto-surface new
+    /// approval cards — that happens only on transition into waitingForUser.
+    private func reconcileApprovalSurface() {
+        guard case .approvalCard(let shownId) = surface else { return }
+        if sessions[shownId]?.status != .waitingForUser
+            || sessions[shownId]?.pendingApprovalTool == nil {
+            if let next = pendingApprovalSessionId {
+                surface = .approvalCard(sessionId: next)
+                activeSessionId = next
+            } else {
+                surface = .collapsed
+            }
+        }
+    }
+
+    // MARK: - Lifecycle
+
+    func start() {
+        startCleanupTimer()
+    }
+
+    deinit {
+        MainActor.assumeIsolated {
+            rotationTimer?.invalidate()
+            cleanupTimer?.invalidate()
+        }
+    }
+}
