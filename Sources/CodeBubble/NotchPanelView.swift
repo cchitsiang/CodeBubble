@@ -1736,8 +1736,8 @@ private struct ApprovalBar: View {
                                 action: onAllowAlways)
                 }
                 .padding(.horizontal, 14)
-            } else {
-                // Passive: jump to terminal to act there
+            } else if !HookInstaller.isInstalled() {
+                // Passive fallback (no hooks): jump to terminal to act there
                 let isQuestion = tool == "AskUserQuestion"
                 Button(action: onJumpToTerminal) {
                     HStack(spacing: 6) {
