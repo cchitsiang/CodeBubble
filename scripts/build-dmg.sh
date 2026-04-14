@@ -60,6 +60,9 @@ xcrun actool \
     "$REPO_ROOT/Assets.xcassets" \
     "$REPO_ROOT/AppIcon.icon"
 
+# Copy AppIcon.icns (actool with .icon bundle may not produce .icns)
+cp "$REPO_ROOT/Sources/CodeBubble/Resources/AppIcon.icns" "$CONTENTS_DIR/Resources/AppIcon.icns"
+
 # Copy SPM resource bundles at .app root where Bundle.module expects them
 for bundle in "$BUILD_DIR"/*/release/*.bundle; do
     if [ -e "$bundle" ]; then
