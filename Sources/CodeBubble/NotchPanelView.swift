@@ -116,6 +116,7 @@ struct NotchPanelView: View {
                                     projectName: session.projectDisplayName,
                                     queueCount: appState.hookApprovalQueue.count,
                                     isInteractive: appState.pendingHookApproval?.sessionId == sessionId,
+                                    suppressPassive: appState.recentlyResolvedAnyApproval,
                                     onJumpToTerminal: {
                                         TerminalActivator.activate(session: session, sessionId: sessionId)
                                     },
@@ -1641,8 +1642,9 @@ private struct ApprovalBar: View {
     let projectName: String?
     let queueCount: Int
     /// When true, show Allow/Deny/Always buttons (hook-based).
-    /// When false, show "Approve in Terminal" (passive detection only).
     let isInteractive: Bool
+    /// When true, suppress passive fallback (recently resolved via hook).
+    let suppressPassive: Bool
     let onJumpToTerminal: () -> Void
     let onAllow: () -> Void
     let onAllowAlways: () -> Void
@@ -1734,7 +1736,7 @@ private struct ApprovalBar: View {
                                 action: onAllowAlways)
                 }
                 .padding(.horizontal, 14)
-            } else if !appState.recentlyResolvedAnyApproval {
+            } else if !suppressPassive {
                 // Passive fallback: jump to terminal to act there.
                 // Hidden briefly after a hook action to prevent one-frame flash.
                 let isQuestion = tool == "AskUserQuestion"
