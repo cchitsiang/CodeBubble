@@ -408,19 +408,13 @@ final class AppState {
     /// First pending question (if any).
     var pendingHookQuestion: HookQuestion? { hookQuestionQueue.first }
 
-    /// Enqueue a question from the AskUserQuestion hook.
+    /// Enqueue a question batch from the AskUserQuestion hook.
     func enqueueHookQuestion(
         sessionId: String,
-        question: String,
-        options: [String]?,
+        items: [QuestionItem],
         continuation: CheckedContinuation<Data, Never>
     ) {
-        let q = HookQuestion(
-            sessionId: sessionId,
-            question: question,
-            options: options,
-            continuation: continuation
-        )
+        let q = HookQuestion(sessionId: sessionId, items: items, continuation: continuation)
         hookQuestionQueue.append(q)
 
         surface = .questionCard(sessionId: sessionId)
@@ -430,8 +424,8 @@ final class AppState {
         refreshDerivedState()
     }
 
-    /// Answer the head question with the selected option text.
-    func answerHookQuestion(_ answer: String) {
+    /// Answer the head question with collected answers (key → value).
+    func answerHookQuestion(_ answers: [String: String]) {
         guard !hookQuestionQueue.isEmpty else { return }
         let head = hookQuestionQueue.removeFirst()
 
@@ -440,12 +434,13 @@ final class AppState {
                 "hookEventName": "PermissionRequest",
                 "decision": [
                     "behavior": "allow",
-                    "updatedInput": ["answers": ["answer": answer]]
+                    "updatedInput": ["answers": answers]
                 ] as [String: Any]
             ] as [String: Any]
         ]
         let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         head.continuation.resume(returning: data)
+        recentlyResolvedApprovals[head.sessionId] = Date()
 
         if let next = hookQuestionQueue.first {
             surface = .questionCard(sessionId: next.sessionId)
@@ -463,6 +458,7 @@ final class AppState {
 
         let data = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
         head.continuation.resume(returning: data)
+        recentlyResolvedApprovals[head.sessionId] = Date()
 
         if let next = hookQuestionQueue.first {
             surface = .questionCard(sessionId: next.sessionId)

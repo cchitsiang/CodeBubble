@@ -136,8 +136,7 @@ struct NotchPanelView: View {
                         if let q = appState.pendingHookQuestion, q.sessionId == sessionId {
                             VStack(spacing: 0) {
                                 QuestionBar(
-                                    question: q.question,
-                                    options: q.options,
+                                    items: q.items,
                                     sessionSource: appState.sessions[sessionId]?.source,
                                     projectName: appState.sessions[sessionId]?.projectDisplayName,
                                     onAnswer: { appState.answerHookQuestion($0) },
@@ -1779,25 +1778,32 @@ private struct PixelButton: View {
     }
 }
 
-// MARK: - Question Bar (AskUserQuestion via hook)
+// MARK: - Question Bar (AskUserQuestion via hook — ported from CodeIsland)
 
 private struct QuestionBar: View {
-    let question: String
-    let options: [String]?
+    let items: [QuestionItem]
     let sessionSource: String?
     let projectName: String?
-    let onAnswer: (String) -> Void
+    let onAnswer: ([String: String]) -> Void
     let onSkip: () -> Void
 
     @State private var textInput = ""
     @FocusState private var isFocused: Bool
+    @State private var selectedIndex: Int? = nil
+    @State private var currentQuestionIndex: Int = 0
+    @State private var collectedAnswers: [String: String] = [:]
 
     private let cyan = Color(red: 0.4, green: 0.7, blue: 1.0)
 
+    private var currentItem: QuestionItem? {
+        guard currentQuestionIndex < items.count else { return nil }
+        return items[currentQuestionIndex]
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            // Context row
-            HStack(spacing: 6) {
+            // Session context
+            HStack(spacing: 5) {
                 if let src = sessionSource, let icon = cliIcon(source: src, size: 12) {
                     Image(nsImage: icon)
                         .resizable()
@@ -1815,86 +1821,174 @@ private struct QuestionBar: View {
             }
             .padding(.horizontal, 14)
 
-            // Question text
-            HStack(spacing: 6) {
-                Text("?")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(cyan)
-                Text(question)
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.9))
-                    .lineLimit(3)
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-
-            // Option buttons or free-text input
-            if let options, !options.isEmpty {
-                VStack(spacing: 4) {
-                    ForEach(options, id: \.self) { option in
-                        Button {
-                            onAnswer(option)
-                        } label: {
-                            Text(option)
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.9))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 7)
-                                .background(Color.white.opacity(0.08))
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 6)
-                                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                                )
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(.horizontal, 14)
-            } else {
-                // Free-text input
+            if let item = currentItem {
+                // Question header + text
                 HStack(spacing: 6) {
-                    TextField(L10n.shared["type_answer"], text: $textInput)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .focused($isFocused)
-                        .onSubmit {
-                            guard !textInput.isEmpty else { return }
-                            onAnswer(textInput)
-                        }
-                    Button {
-                        guard !textInput.isEmpty else { return }
-                        onAnswer(textInput)
-                    } label: {
-                        Text(L10n.shared["submit"])
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.black)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(Color(red: 0.29, green: 0.87, blue: 0.50))
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    Text("?")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(cyan)
+                    if let header = item.header, !header.isEmpty {
+                        Text(header)
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(cyan.opacity(0.7))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(cyan.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
                     }
-                    .buttonStyle(.plain)
+                    Text(item.question)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(3)
+                    Spacer()
+                    if items.count > 1 {
+                        Text("\(currentQuestionIndex + 1)/\(items.count)")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.white.opacity(0.1))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                    }
+                }
+                .padding(.horizontal, 14)
+
+                // Options or text input
+                if let opts = item.options, !opts.isEmpty {
+                    VStack(spacing: 4) {
+                        ForEach(Array(opts.enumerated()), id: \.offset) { idx, option in
+                            let desc = item.descriptions?.indices.contains(idx) == true ? item.descriptions?[idx] : nil
+                            OptionRow(index: idx + 1, label: option, description: desc,
+                                      isSelected: selectedIndex == idx, accent: cyan) {
+                                selectedIndex = idx
+                                advanceWithAnswer(option)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                } else {
+                    // Free-text input
+                    HStack(spacing: 6) {
+                        Text(">")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                        TextField(L10n.shared["type_answer"], text: $textInput)
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 10.5, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .focused($isFocused)
+                            .onSubmit {
+                                if !textInput.isEmpty { advanceWithAnswer(textInput) }
+                            }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+                    .padding(.horizontal, 14)
+                }
+
+                // Buttons
+                HStack(spacing: 6) {
+                    if currentQuestionIndex > 0 {
+                        PixelButton(label: "BACK", fg: .white.opacity(0.6),
+                                    bg: Color.white.opacity(0.06), border: Color.white.opacity(0.12),
+                                    action: goBack)
+                    }
+                    PixelButton(label: L10n.shared["skip"], fg: .white.opacity(0.6),
+                                bg: Color.white.opacity(0.06), border: Color.white.opacity(0.12),
+                                action: onSkip)
+                    if item.options == nil || item.options?.isEmpty == true {
+                        PixelButton(label: L10n.shared["submit"], fg: .white.opacity(0.95),
+                                    bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                                    border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                                    action: { if !textInput.isEmpty { advanceWithAnswer(textInput) } })
+                    }
                 }
                 .padding(.horizontal, 14)
             }
-
-            // Skip button
-            Button(action: onSkip) {
-                Text(L10n.shared["skip"])
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-            .buttonStyle(.plain)
-            .padding(.bottom, 2)
         }
         .padding(.vertical, 10)
         .onAppear { isFocused = true }
+    }
+
+    private func advanceWithAnswer(_ answer: String) {
+        guard let item = currentItem else { return }
+        collectedAnswers[item.answerKey] = answer
+
+        if currentQuestionIndex + 1 < items.count {
+            withAnimation(NotchAnimation.micro) {
+                currentQuestionIndex += 1
+                selectedIndex = nil
+                textInput = ""
+            }
+        } else {
+            onAnswer(collectedAnswers)
+        }
+    }
+
+    private func goBack() {
+        guard currentQuestionIndex > 0 else { return }
+        let prevItem = items[currentQuestionIndex - 1]
+        collectedAnswers.removeValue(forKey: prevItem.answerKey)
+        withAnimation(NotchAnimation.micro) {
+            currentQuestionIndex -= 1
+            selectedIndex = nil
+            textInput = ""
+        }
+    }
+}
+
+// MARK: - OptionRow (ported from CodeIsland)
+
+private struct OptionRow: View {
+    let index: Int
+    let label: String
+    let description: String?
+    let isSelected: Bool
+    let accent: Color
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(hovering ? "▸" : " ")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent)
+                    .frame(width: 10)
+                Text("\(index).")
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(hovering ? 1 : 0.6))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                        .font(.system(size: 10.5, weight: hovering ? .semibold : .regular, design: .monospaced))
+                        .foregroundStyle(.white.opacity(hovering ? 1 : 0.75))
+                    if let description, !description.isEmpty {
+                        Text(description)
+                            .font(.system(size: 9, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .lineLimit(2)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(hovering ? accent.opacity(0.4) : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
     }
 }

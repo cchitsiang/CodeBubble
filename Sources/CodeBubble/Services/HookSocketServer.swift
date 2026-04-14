@@ -120,19 +120,42 @@ final class HookSocketServer {
 
         // AskUserQuestion is a question, not a permission — route to QuestionBar
         if toolName == "AskUserQuestion" {
-            let questionText = (toolInput["question"] as? String) ?? "Question"
-            var options: [String]?
-            if let strOpts = toolInput["options"] as? [String] {
-                options = strOpts
-            } else if let dictOpts = toolInput["options"] as? [[String: Any]] {
-                options = dictOpts.compactMap { $0["label"] as? String }
+            var items: [QuestionItem] = []
+
+            // Parse multi-question format: tool_input.questions[]
+            if let questions = toolInput["questions"] as? [[String: Any]] {
+                for (index, q) in questions.enumerated() {
+                    let text = q["question"] as? String ?? "Question"
+                    let header = q["header"] as? String
+                    var opts: [String]?
+                    var descs: [String]?
+                    if let dictOpts = q["options"] as? [[String: Any]] {
+                        opts = dictOpts.compactMap { $0["label"] as? String }
+                        descs = dictOpts.compactMap { $0["description"] as? String }
+                        if descs?.allSatisfy({ $0.isEmpty }) == true { descs = nil }
+                    }
+                    let key = (header?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? header! : nil) ?? "answer_\(index + 1)"
+                    items.append(QuestionItem(question: text, header: header, options: opts, descriptions: descs, answerKey: key))
+                }
             }
+
+            // Fallback: single question format
+            if items.isEmpty {
+                let text = (toolInput["question"] as? String) ?? "Question"
+                var opts: [String]?
+                if let strOpts = toolInput["options"] as? [String] {
+                    opts = strOpts
+                } else if let dictOpts = toolInput["options"] as? [[String: Any]] {
+                    opts = dictOpts.compactMap { $0["label"] as? String }
+                }
+                items.append(QuestionItem(question: text, header: nil, options: opts, descriptions: nil, answerKey: "answer"))
+            }
+
             Task {
                 let responseData = await withCheckedContinuation { continuation in
                     appState.enqueueHookQuestion(
                         sessionId: sessionId,
-                        question: questionText,
-                        options: options,
+                        items: items,
                         continuation: continuation
                     )
                 }
