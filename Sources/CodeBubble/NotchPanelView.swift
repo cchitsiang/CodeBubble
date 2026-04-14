@@ -988,6 +988,17 @@ private struct SessionCard: View {
                     }
                     .padding(.leading, 4)
                 }
+
+                // Completion: show last assistant message when idle (visible on completion card)
+                if session.status == .idle, isCompletion,
+                   let reply = session.lastAssistantMessage, !reply.isEmpty {
+                    Text(reply)
+                        .font(.system(size: fontSize, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(4)
+                        .truncationMode(.tail)
+                        .padding(.top, 2)
+                }
             } // end Column 2 VStack
         } // end HStack
         .padding(.horizontal, 16)
