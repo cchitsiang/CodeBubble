@@ -474,4 +474,119 @@ final class ClaudeProviderTests: XCTestCase {
         let d2 = ClaudeJSONLEntry.parseTimestamp("2026-04-10T12:34:56Z")
         XCTAssertNotNil(d2)
     }
+
+    // MARK: - Text question heuristic (isTextAskingQuestion)
+
+    func testTextQuestionEndsWithQuestionMark() {
+        let msg = ClaudeMessage(
+            role: "assistant", model: nil,
+            contentBlocks: [
+                ClaudeContentBlock(type: "text", text: "What is 2 + 2?", toolName: nil, toolId: nil, toolInput: nil)
+            ],
+            stopReason: "end_turn"
+        )
+        XCTAssertTrue(ClaudeProvider.isTextAskingQuestion(msg))
+    }
+
+    func testTextQuestionWithOptionsAfter() {
+        let text = """
+        What's your primary motivation for picking Rust?
+
+        - A) Learn Rust — You're new to it and want a project that teaches you the language
+        - B) Performance — You have a problem that needs speed, low-level control, or zero-cost abstractions
+        - C) Build something real — You want a useful tool/product and Rust happens to be the right fit
+        - D) Fun / exploration — You want something interesting to hack on, no particular goal
+        """
+        let msg = ClaudeMessage(
+            role: "assistant", model: nil,
+            contentBlocks: [
+                ClaudeContentBlock(type: "text", text: text, toolName: nil, toolId: nil, toolInput: nil)
+            ],
+            stopReason: "end_turn"
+        )
+        XCTAssertTrue(ClaudeProvider.isTextAskingQuestion(msg))
+    }
+
+    func testTextQuestionWithFollowUpSuggestion() {
+        let text = """
+        Is there a pain point in your daily workflow that annoys you? Something where you think "I wish
+        there was a better tool for this"?
+
+        Or if nothing comes to mind, I can propose ideas based on what's underserved in the dev tooling
+        space. Just say "propose ideas" and I'll go that route.
+        """
+        let msg = ClaudeMessage(
+            role: "assistant", model: nil,
+            contentBlocks: [
+                ClaudeContentBlock(type: "text", text: text, toolName: nil, toolId: nil, toolInput: nil)
+            ],
+            stopReason: "end_turn"
+        )
+        XCTAssertTrue(ClaudeProvider.isTextAskingQuestion(msg))
+    }
+
+    func testTextNotAQuestionDeclarativeEnding() {
+        let text = "I've fixed the bug in line 42. The test passes now and everything looks good."
+        let msg = ClaudeMessage(
+            role: "assistant", model: nil,
+            contentBlocks: [
+                ClaudeContentBlock(type: "text", text: text, toolName: nil, toolId: nil, toolInput: nil)
+            ],
+            stopReason: "end_turn"
+        )
+        XCTAssertFalse(ClaudeProvider.isTextAskingQuestion(msg))
+    }
+
+    func testTextNotAQuestionEmptyContent() {
+        let msg = ClaudeMessage(
+            role: "assistant", model: nil,
+            contentBlocks: nil,
+            stopReason: "end_turn"
+        )
+        XCTAssertFalse(ClaudeProvider.isTextAskingQuestion(msg))
+    }
+
+    func testTextQuestionDetectsWaitingForUserAfter20s() {
+        // end_turn + text question + age > 20s → .waitingForUser
+        let now = Date()
+        let text = "Which approach do you prefer?\n\n1. Option A\n2. Option B"
+        let entries = [
+            ClaudeJSONLEntry(
+                type: "assistant", sessionId: "s1",
+                timestamp: now.addingTimeInterval(-30),
+                cwd: nil, gitBranch: nil, version: nil, permissionMode: nil,
+                message: ClaudeMessage(
+                    role: "assistant", model: nil,
+                    contentBlocks: [
+                        ClaudeContentBlock(type: "text", text: text, toolName: nil, toolId: nil, toolInput: nil)
+                    ],
+                    stopReason: "end_turn"
+                )
+            )
+        ]
+        let activity = ClaudeProvider.determineActivity(from: entries, now: now)
+        XCTAssertEqual(activity, .waitingForUser)
+    }
+
+    func testTextQuestionIdleWithin20s() {
+        // end_turn + text question + age < 20s → .idle (avoid streaming flicker)
+        let now = Date()
+        let text = "Which approach do you prefer?"
+        let entries = [
+            ClaudeJSONLEntry(
+                type: "assistant", sessionId: "s1",
+                timestamp: now.addingTimeInterval(-5),
+                cwd: nil, gitBranch: nil, version: nil, permissionMode: nil,
+                message: ClaudeMessage(
+                    role: "assistant", model: nil,
+                    contentBlocks: [
+                        ClaudeContentBlock(type: "text", text: text, toolName: nil, toolId: nil, toolInput: nil)
+                    ],
+                    stopReason: "end_turn"
+                )
+            )
+        ]
+        let activity = ClaudeProvider.determineActivity(from: entries, now: now)
+        XCTAssertEqual(activity, .idle)
+    }
 }
