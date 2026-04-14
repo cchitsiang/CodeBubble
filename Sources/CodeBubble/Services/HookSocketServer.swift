@@ -132,6 +132,14 @@ final class HookSocketServer {
             return
         }
 
+        // Auto-approve when session/subagent has bypass permissions
+        let permMode = (json["permission_mode"] as? String) ?? (json["permissionMode"] as? String)
+        if permMode == "bypassPermissions" || permMode == "acceptEdits" {
+            let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+            send(connection: connection, data: Data(response.utf8))
+            return
+        }
+
         // Monitor for bridge process disconnect — if the bridge dies (e.g., Claude killed it),
         // clean up the orphaned queue entry so the ApprovalBar/QuestionBar dismisses.
         monitorPeerDisconnect(connection: connection, sessionId: sessionId)
