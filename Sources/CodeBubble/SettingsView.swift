@@ -1101,6 +1101,7 @@ private struct ShortcutsPage: View {
     @State private var eventMonitor: Any?
     @State private var refreshKey = 0
     @State private var accessibilityGranted = AXIsProcessTrusted()
+    private let accessibilityTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
@@ -1142,8 +1143,9 @@ private struct ShortcutsPage: View {
         .formStyle(.grouped)
         .onAppear { accessibilityGranted = AXIsProcessTrusted() }
         .onDisappear { stopRecording() }
-        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)) { _ in
-            accessibilityGranted = AXIsProcessTrusted()
+        .onReceive(accessibilityTimer) { _ in
+            let current = AXIsProcessTrusted()
+            if current != accessibilityGranted { accessibilityGranted = current }
         }
     }
 
