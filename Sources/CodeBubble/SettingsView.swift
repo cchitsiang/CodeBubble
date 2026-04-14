@@ -1140,6 +1140,7 @@ private struct ShortcutsPage: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { accessibilityGranted = AXIsProcessTrusted() }
         .onDisappear { stopRecording() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)) { _ in
             accessibilityGranted = AXIsProcessTrusted()
