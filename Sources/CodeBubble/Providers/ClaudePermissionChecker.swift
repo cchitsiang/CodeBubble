@@ -4,10 +4,11 @@ import Foundation
 /// Ported from c9watch's permission checker logic.
 struct ClaudePermissionChecker {
     /// Tools that are always auto-approved (read-only or safe operations).
+    /// Note: AskUserQuestion is intentionally NOT here — it blocks waiting for
+    /// user input, so JSONL detection should classify it as .waitingForUser.
     private static let alwaysAllowedTools: Set<String> = [
         "Read", "Glob", "Grep", "WebFetch", "WebSearch",
         "Task", "TaskList", "TaskGet", "TaskCreate", "TaskUpdate",
-        "AskUserQuestion",
     ]
 
     enum Pattern {
