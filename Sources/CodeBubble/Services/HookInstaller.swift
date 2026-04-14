@@ -121,12 +121,12 @@ enum HookInstaller {
         var hooks = json["hooks"] as? [String: Any] ?? [:]
         var permissionReqs = hooks["PermissionRequest"] as? [[String: Any]] ?? []
 
-        // Replace any existing codebubble-bridge entry so we stay idempotent
+        // Remove any existing codebubble entries (bridge + legacy hook.sh) so we stay idempotent
         permissionReqs.removeAll { entry in
             if let entryHooks = entry["hooks"] as? [[String: Any]] {
                 return entryHooks.contains { hook in
                     let cmd = hook["command"] as? String ?? ""
-                    return cmd.contains("codebubble-bridge")
+                    return cmd.contains("codebubble")
                 }
             }
             return false
