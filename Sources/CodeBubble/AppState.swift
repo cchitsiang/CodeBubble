@@ -459,6 +459,9 @@ final class AppState {
         let data = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
         head.continuation.resume(returning: data)
         recentlyResolvedApprovals[head.sessionId] = Date()
+        sessions[head.sessionId]?.status = .thinking
+        sessions[head.sessionId]?.pendingApprovalTool = nil
+        sessions[head.sessionId]?.pendingApprovalDetail = nil
 
         if let next = hookQuestionQueue.first {
             surface = .questionCard(sessionId: next.sessionId)
