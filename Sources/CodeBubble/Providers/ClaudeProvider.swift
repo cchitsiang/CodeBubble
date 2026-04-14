@@ -238,7 +238,8 @@ final class ClaudeProvider: SessionProvider {
             var effectiveActivity = activity
             var subagentPendingTool: String?
             var subagentPendingDetail: String?
-            if case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
+            let mainBypass = (filePermMode == "bypassPermissions" || filePermMode == "acceptEdits")
+            if !mainBypass, case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
                 let subagentDir = (filePath as NSString).deletingLastPathComponent + "/" + sessionId + "/subagents"
                 if let sub = checkSubagentForPendingApproval(dir: subagentDir, fm: fm, now: now) {
                     effectiveActivity = .waitingForUser
@@ -327,8 +328,19 @@ final class ClaudeProvider: SessionProvider {
 
         guard let path = latestPath else { return nil }
 
-        // Read last few entries
+        // Check subagent's permissionMode — if bypass, all tools are auto-approved
+        let subPermMode = sessionPermissionMode(forFile: path)
+        if subPermMode == "bypassPermissions" || subPermMode == "acceptEdits" {
+            return nil
+        }
+
+        // Read last few entries — also check inline permissionMode
         let entries = readRecentEntries(from: path, count: 5, fm: fm)
+        let entryMode = entries.last(where: { $0.permissionMode != nil })?.permissionMode
+        if entryMode == "bypassPermissions" || entryMode == "acceptEdits" {
+            return nil
+        }
+
         guard let last = entries.last, last.type == "assistant",
               let msg = last.message, msg.stopReason == "tool_use" else { return nil }
 
