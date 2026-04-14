@@ -1793,6 +1793,9 @@ private struct QuestionBar: View {
     @State private var selectedIndex: Int? = nil
     @State private var currentQuestionIndex: Int = 0
     @State private var collectedAnswers: [String: String] = [:]
+    @State private var showOtherInput: Bool = false
+    @State private var otherText: String = ""
+    @FocusState private var otherFocused: Bool
 
     private let cyan = Color(red: 0.4, green: 0.7, blue: 1.0)
 
@@ -1862,13 +1865,47 @@ private struct QuestionBar: View {
                             OptionRow(index: idx + 1, label: option, description: desc,
                                       isSelected: selectedIndex == idx, accent: cyan) {
                                 selectedIndex = idx
+                                showOtherInput = false
                                 advanceWithAnswer(option)
                             }
+                        }
+
+                        // "Type something" option (CodeIsland's "Other")
+                        OptionRow(index: -1, label: "Type something…", description: nil,
+                                  isSelected: showOtherInput, accent: cyan) {
+                            showOtherInput = true
+                            selectedIndex = nil
+                        }
+
+                        // Custom text input (shown when "Type something" is selected)
+                        if showOtherInput {
+                            HStack(spacing: 6) {
+                                Text(">")
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(Color(red: 0.3, green: 0.85, blue: 0.4))
+                                TextField(L10n.shared["type_answer"], text: $otherText)
+                                    .textFieldStyle(.plain)
+                                    .font(.system(size: 10.5, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                    .focused($otherFocused)
+                                    .onSubmit {
+                                        if !otherText.isEmpty { advanceWithAnswer(otherText) }
+                                    }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.white.opacity(0.05))
+                            .cornerRadius(4)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+                            )
+                            .onAppear { otherFocused = true }
                         }
                     }
                     .padding(.horizontal, 14)
                 } else {
-                    // Free-text input
+                    // No options — text input only
                     HStack(spacing: 6) {
                         Text(">")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -1903,7 +1940,12 @@ private struct QuestionBar: View {
                     PixelButton(label: L10n.shared["skip"], fg: .white.opacity(0.6),
                                 bg: Color.white.opacity(0.06), border: Color.white.opacity(0.12),
                                 action: onSkip)
-                    if item.options == nil || item.options?.isEmpty == true {
+                    if showOtherInput {
+                        PixelButton(label: L10n.shared["submit"], fg: .white.opacity(0.95),
+                                    bg: Color(red: 0.16, green: 0.38, blue: 0.18),
+                                    border: Color(red: 0.28, green: 0.62, blue: 0.32),
+                                    action: { if !otherText.isEmpty { advanceWithAnswer(otherText) } })
+                    } else if item.options == nil || item.options?.isEmpty == true {
                         PixelButton(label: L10n.shared["submit"], fg: .white.opacity(0.95),
                                     bg: Color(red: 0.16, green: 0.38, blue: 0.18),
                                     border: Color(red: 0.28, green: 0.62, blue: 0.32),
@@ -1926,6 +1968,8 @@ private struct QuestionBar: View {
                 currentQuestionIndex += 1
                 selectedIndex = nil
                 textInput = ""
+                showOtherInput = false
+                otherText = ""
             }
         } else {
             onAnswer(collectedAnswers)
@@ -1940,6 +1984,8 @@ private struct QuestionBar: View {
             currentQuestionIndex -= 1
             selectedIndex = nil
             textInput = ""
+            showOtherInput = false
+            otherText = ""
         }
     }
 }
@@ -1962,7 +2008,7 @@ private struct OptionRow: View {
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(accent)
                     .frame(width: 10)
-                Text("\(index).")
+                Text(index > 0 ? "\(index)." : "…")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundStyle(accent.opacity(hovering ? 1 : 0.6))
                 VStack(alignment: .leading, spacing: 2) {
