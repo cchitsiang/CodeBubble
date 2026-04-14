@@ -505,10 +505,11 @@ final class ClaudeProvider: SessionProvider {
                 return .executingTool(toolName)
 
             case "end_turn":
-                // Text question heuristic: if last text contains ? and age > 20s,
-                // treat as waiting for user. Works as passive fallback (e.g., app restart).
+                // Text question heuristic: if last text contains ? and age > 3s,
+                // treat as waiting for user. stop_reason=end_turn already confirms
+                // streaming is done, so we only need a brief settling delay.
                 let age = now.timeIntervalSince(lastEntry.timestamp)
-                if age > 20, Self.isTextAskingQuestion(message) {
+                if age > 3, Self.isTextAskingQuestion(message) {
                     return .waitingForUser
                 }
                 return .idle
