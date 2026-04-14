@@ -74,13 +74,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         promptAccessibilityIfNeeded()
         setupGlobalShortcut()
 
-        // Poll for Accessibility permission every 5s until granted,
-        // then re-register shortcuts and stop polling.
+        // Listen for Accessibility permission changes + poll as fallback
         if !wasAccessibilityGranted {
+            // Instant: system broadcasts when Accessibility list changes
+            DistributedNotificationCenter.default().addObserver(
+                forName: NSNotification.Name("com.apple.accessibility.api"),
+                object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in self?.reCheckAccessibility() }
+            }
+            // Fallback: poll every 5s in case the notification doesn't fire
             accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
-                Task { @MainActor in
-                    self?.reCheckAccessibility()
-                }
+                Task { @MainActor in self?.reCheckAccessibility() }
             }
         }
 
