@@ -56,6 +56,16 @@ struct ClaudeJSONLEntry {
             return nil
         }
 
+        // Parse permission-mode entries (carries the session's permissionMode)
+        if type == "permission-mode" {
+            let pm = json["permissionMode"] as? String
+            return ClaudeJSONLEntry(
+                type: type, sessionId: json["sessionId"] as? String,
+                timestamp: Date(), cwd: nil, gitBranch: nil,
+                version: nil, permissionMode: pm, message: nil
+            )
+        }
+
         // Skip non-meaningful types
         guard type == "user" || type == "assistant" else {
             return nil
@@ -131,6 +141,9 @@ final class ClaudeProvider: SessionProvider {
     private var permissionChecker: ClaudePermissionChecker
     private var lastPermissionLoad: Date = .distantPast
 
+    /// Cache: JSONL file path → session permissionMode (read from file header once).
+    private var sessionPermissionModes: [String: String] = [:]
+
     init(configDir: String? = nil) {
         if let dir = configDir {
             self.configDir = dir
@@ -191,9 +204,13 @@ final class ClaudeProvider: SessionProvider {
                 continue
             }
 
+            // Check file-level permission mode (from header)
+            let filePermMode = sessionPermissionMode(forFile: filePath)
+
             let activity = ClaudeProvider.determineActivity(
                 from: entries,
                 permissionChecker: permissionChecker,
+                sessionPermissionMode: filePermMode,
                 now: now
             )
             let lastEntry = entries.last!
@@ -251,6 +268,40 @@ final class ClaudeProvider: SessionProvider {
         return results
     }
 
+    // MARK: - Session Permission Mode
+
+    /// Read the permissionMode from the head of a JSONL file.
+    /// Claude writes a `{"type":"permission-mode","permissionMode":"..."}` entry
+    /// near the top of the file. We cache the result per file path.
+    private func sessionPermissionMode(forFile path: String) -> String? {
+        if let cached = sessionPermissionModes[path] { return cached }
+
+        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+        defer { handle.closeFile() }
+
+        // Read first 8KB — the permission-mode entry is in the first few lines
+        let headData = handle.readData(ofLength: 8192)
+        guard let text = String(data: headData, encoding: .utf8) else { return nil }
+
+        for line in text.components(separatedBy: "\n").prefix(20) {
+            guard let entry = ClaudeJSONLEntry.parse(line),
+                  entry.type == "permission-mode",
+                  let mode = entry.permissionMode else { continue }
+            sessionPermissionModes[path] = mode
+            return mode
+        }
+
+        // Also check if entries carry permissionMode inline
+        for line in text.components(separatedBy: "\n").prefix(20) {
+            guard let entry = ClaudeJSONLEntry.parse(line),
+                  let mode = entry.permissionMode else { continue }
+            sessionPermissionModes[path] = mode
+            return mode
+        }
+
+        return nil
+    }
+
     // MARK: - Tool Input Description
 
     /// Build a short human-readable description of a tool invocation for the approval UI.
@@ -296,6 +347,7 @@ final class ClaudeProvider: SessionProvider {
     static func determineActivity(
         from entries: [ClaudeJSONLEntry],
         permissionChecker: ClaudePermissionChecker = ClaudePermissionChecker(patterns: []),
+        sessionPermissionMode: String? = nil,
         now: Date = Date()
     ) -> SessionActivity {
         guard let lastEntry = entries.last else {
@@ -323,8 +375,9 @@ final class ClaudeProvider: SessionProvider {
                 guard !toolUses.isEmpty else { return .idle }
 
                 // If the session is in bypass mode, tools execute without asking.
-                // Check the most recent entry's permissionMode (entries carry the live mode).
-                let currentMode = entries.last(where: { $0.permissionMode != nil })?.permissionMode
+                // Check: 1) file-level permission-mode entry, 2) inline permissionMode on entries
+                let entryMode = entries.last(where: { $0.permissionMode != nil })?.permissionMode
+                let currentMode = entryMode ?? sessionPermissionMode
                 let bypassMode = (currentMode == "bypassPermissions" || currentMode == "acceptEdits")
 
                 let needsApproval = !bypassMode && toolUses.contains { block in
