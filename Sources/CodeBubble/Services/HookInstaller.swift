@@ -22,6 +22,24 @@ enum HookInstaller {
         registerHook()
     }
 
+    /// Check if our bridge hook is currently registered in settings.json.
+    static func isInstalled() -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: bridgePath),
+              let data = fm.contents(atPath: settingsPath),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let hooks = json["hooks"] as? [String: Any],
+              let permReqs = hooks["PermissionRequest"] as? [[String: Any]] else {
+            return false
+        }
+        return permReqs.contains { entry in
+            if let entryHooks = entry["hooks"] as? [[String: Any]] {
+                return entryHooks.contains { ($0["command"] as? String ?? "").contains("codebubble-bridge") }
+            }
+            return false
+        }
+    }
+
     /// Remove our bridge + hook entry from settings.
     static func uninstall() {
         let fm = FileManager.default

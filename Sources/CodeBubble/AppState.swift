@@ -36,9 +36,6 @@ final class AppState {
         if case .completionCard = surface { return true }
         return false
     }
-    /// Timestamp of last hook approval/deny/skip action — suppresses passive
-    /// approval surfacing briefly so the hook gets first chance on sequential tools.
-    private var lastHookActionTime: Date = .distantPast
 
     var rotatingSessionId: String?
     var rotatingSession: SessionSnapshot? {
@@ -358,7 +355,6 @@ final class AppState {
     }
 
     private func clearPendingApproval(for sessionId: String, approved: Bool) {
-        lastHookActionTime = Date()
         // Only clear session's pending info if no other approval exists for this session
         let stillPending = hookApprovalQueue.contains { $0.sessionId == sessionId }
         if !stillPending {
@@ -679,18 +675,18 @@ final class AppState {
     /// Hook-based queue is authoritative (real interactive approval); falls back
     /// to JSONL-detected waitingForUser sessions (read-only).
     var pendingApprovalSessionId: String? {
+        // Hook queue is authoritative — always check first
         if let head = hookApprovalQueue.first {
             return head.sessionId
         }
-        // Suppress passive approvals briefly after a hook action — gives the next
-        // hook a chance to fire before we fall back to "Approve in Terminal".
-        if Date().timeIntervalSince(lastHookActionTime) < 5 {
+        // When hooks are installed, don't show passive "Approve in Terminal" —
+        // the hook will fire and show the interactive ApprovalBar.
+        // Passive fallback is only for setups without hooks.
+        if HookInstaller.isInstalled() {
             return nil
         }
-        // JSONL-detected: skip sessions recently resolved (avoids re-surfacing after Allow/Deny)
         return sessions
             .filter { $0.value.status == .waitingForUser && $0.value.pendingApprovalTool != nil }
-            .filter { recentlyResolvedApprovals[$0.key] == nil }
             .max { a, b in a.value.lastActivity < b.value.lastActivity }?
             .key
     }
