@@ -10,9 +10,9 @@ if [[ "$*" == *"--debug"* ]]; then
     swift build
     DEBUG_BIN=".build/arm64-apple-macosx/debug/$APP_NAME"
     DEBUG_BRIDGE=".build/arm64-apple-macosx/debug/codebubble-bridge"
-    echo "Codesigning (ad-hoc)..."
-    codesign --force --sign - --entitlements "$ENTITLEMENTS" "$DEBUG_BIN"
-    [ -f "$DEBUG_BRIDGE" ] && codesign --force --sign - "$DEBUG_BRIDGE"
+    echo "Codesigning (ad-hoc with stable identifier)..."
+    codesign --force --sign - --identifier "com.codebubble.app" --entitlements "$ENTITLEMENTS" "$DEBUG_BIN"
+    [ -f "$DEBUG_BRIDGE" ] && codesign --force --sign - --identifier "com.codebubble.bridge" "$DEBUG_BRIDGE"
     echo "Done: $DEBUG_BIN"
     echo "Run: $DEBUG_BIN"
     exit 0
