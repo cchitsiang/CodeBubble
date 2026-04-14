@@ -132,9 +132,17 @@ final class HookSocketServer {
             return
         }
 
-        // Auto-approve when session/subagent has bypass permissions
+        // Auto-approve when session has bypass permissions
         let permMode = (json["permission_mode"] as? String) ?? (json["permissionMode"] as? String)
         if permMode == "bypassPermissions" || permMode == "acceptEdits" {
+            let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+            send(connection: connection, data: Data(response.utf8))
+            return
+        }
+
+        // Auto-approve subagent tool calls — the parent already approved spawning
+        // the subagent, so its tools don't need separate user confirmation.
+        if let agentId = json["agent_id"] as? String, !agentId.isEmpty {
             let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
             send(connection: connection, data: Data(response.utf8))
             return
