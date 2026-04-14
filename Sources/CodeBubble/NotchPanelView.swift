@@ -909,7 +909,9 @@ private struct SessionCard: View {
     /// True if this session has a pending approval (either hook-based or JSONL-detected).
     private var hasPendingApproval: Bool {
         if appState.pendingHookApproval?.sessionId == sessionId { return true }
-        if session.status == .waitingForUser && session.pendingApprovalTool != nil { return true }
+        // Passive fallback only when hooks aren't installed
+        if !HookInstaller.isInstalled(),
+           session.status == .waitingForUser, session.pendingApprovalTool != nil { return true }
         return false
     }
 

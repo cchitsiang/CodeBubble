@@ -232,11 +232,14 @@ final class ClaudeProvider: SessionProvider {
                     return blocks.filter { $0.type == "text" }.compactMap { $0.text }.joined(separator: " ")
                 }
 
-            // If main session is executing Agent/Task, check subagent JSONL for pending approval
+            // If main session is executing Agent/Task and hooks are NOT installed,
+            // check subagent JSONL for pending approval (passive fallback).
+            // When hooks ARE installed, subagent approvals are auto-approved via agent_id.
             var effectiveActivity = activity
             var subagentPendingTool: String?
             var subagentPendingDetail: String?
-            if case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
+            if !HookInstaller.isInstalled(),
+               case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
                 let subagentDir = (filePath as NSString).deletingLastPathComponent + "/" + sessionId + "/subagents"
                 if let sub = checkSubagentForPendingApproval(dir: subagentDir, fm: fm, now: now) {
                     effectiveActivity = .waitingForUser
