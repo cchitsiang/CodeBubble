@@ -11,13 +11,16 @@ private let log = Logger(subsystem: "com.codebubble", category: "HookSocketServe
 final class HookSocketServer {
     private let appState: AppState
     private var listener: NWListener?
-    private let permissionChecker: ClaudePermissionChecker
+
+    /// Internal meta-tools that are safe to auto-approve without user confirmation (matches upstream).
+    private static let autoApproveTools: Set<String> = [
+        "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+        "TodoRead", "TodoWrite",
+        "EnterPlanMode", "ExitPlanMode",
+    ]
 
     init(appState: AppState) {
         self.appState = appState
-        let home = NSHomeDirectory()
-        let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? "\(home)/.claude"
-        self.permissionChecker = ClaudePermissionChecker.load(from: configDir)
     }
 
     func start() {
@@ -122,8 +125,8 @@ final class HookSocketServer {
         let toolName = (json["tool_name"] as? String) ?? (json["toolName"] as? String) ?? "Tool"
         let toolInput = (json["tool_input"] as? [String: Any]) ?? [:]
 
-        // Auto-approve safe tools without showing UI (same as upstream)
-        if permissionChecker.isAutoApproved(tool: toolName, input: toolInput) {
+        // Auto-approve internal meta-tools without showing UI (matches upstream)
+        if Self.autoApproveTools.contains(toolName) {
             let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
             send(connection: connection, data: Data(response.utf8))
             return
