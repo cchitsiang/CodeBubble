@@ -1141,7 +1141,7 @@ private struct ShortcutsPage: View {
         }
         .formStyle(.grouped)
         .onDisappear { stopRecording() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didActivateApplicationNotification)) { _ in
             accessibilityGranted = AXIsProcessTrusted()
         }
     }
