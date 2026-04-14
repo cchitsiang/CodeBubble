@@ -886,6 +886,7 @@ private struct SessionCard: View {
     let session: SessionSnapshot
     var isCompletion: Bool = false
     @State private var hovering = false
+    @State private var expanded = false
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.aiMessageLines) private var aiMessageLines = SettingsDefaults.aiMessageLines
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
@@ -908,13 +909,14 @@ private struct SessionCard: View {
 
     var body: some View {
         Button {
-            // If there's a pending approval for this session, show its approval card.
-            // Otherwise, do nothing — use the dedicated terminal icon on the right.
             if hasPendingApproval {
                 withAnimation(NotchAnimation.open) {
                     appState.surface = .approvalCard(sessionId: sessionId)
                     appState.activeSessionId = sessionId
                 }
+            } else {
+                // Toggle inline expansion to show last assistant message
+                withAnimation(NotchAnimation.micro) { expanded.toggle() }
             }
         } label: {
         HStack(alignment: .center, spacing: 8) {
@@ -989,13 +991,13 @@ private struct SessionCard: View {
                     .padding(.leading, 4)
                 }
 
-                // Completion: show last assistant message when idle (visible on completion card)
-                if session.status == .idle, isCompletion,
+                // Last assistant message: shown on completion card or when card is tapped
+                if (isCompletion || expanded),
                    let reply = session.lastAssistantMessage, !reply.isEmpty {
                     Text(reply)
                         .font(.system(size: fontSize, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(4)
+                        .lineLimit(expanded ? 8 : 4)
                         .truncationMode(.tail)
                         .padding(.top, 2)
                 }
