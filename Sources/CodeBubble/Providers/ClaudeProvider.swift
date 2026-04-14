@@ -247,20 +247,18 @@ final class ClaudeProvider: SessionProvider {
                     // Tool-based waiting (permission or AskUserQuestion)
                     pendingTool = lastToolUse.toolName
                     pendingDetail = Self.describeToolInput(toolName: lastToolUse.toolName, input: lastToolUse.toolInput)
-                } else if lastMsg.stopReason == "end_turn" {
+                } else if lastMsg.stopReason == "end_turn", Self.isTextAskingQuestion(lastMsg) {
                     // Text-based question (? heuristic) — show as question needing answer
                     let lastText = lastMsg.contentBlocks?
                         .last(where: { $0.type == "text" })?.text?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if lastText.hasSuffix("?") || lastText.hasSuffix("?)") {
-                        pendingTool = "AskUserQuestion"
-                        // Extract the question — take the last line that ends with ?
-                        let lines = lastText.components(separatedBy: "\n")
-                        pendingDetail = lines.last(where: {
-                            let t = $0.trimmingCharacters(in: .whitespaces)
-                            return t.hasSuffix("?") || t.hasSuffix("?)")
-                        })?.trimmingCharacters(in: .whitespaces)
-                    }
+                    pendingTool = "AskUserQuestion"
+                    // Extract the first line that ends with ?
+                    let lines = lastText.components(separatedBy: "\n")
+                    pendingDetail = lines.first(where: {
+                        let t = $0.trimmingCharacters(in: .whitespaces)
+                        return t.hasSuffix("?") || t.hasSuffix("?)")
+                    })?.trimmingCharacters(in: .whitespaces)
                 }
             }
 
@@ -282,6 +280,49 @@ final class ClaudeProvider: SessionProvider {
         }
 
         return results
+    }
+
+    // MARK: - Text Question Detection
+
+    /// Detect if an assistant message is asking the user a text-based question.
+    /// Patterns (from c9watch):
+    ///   1. Last text block ends with '?' or '?)'
+    ///   2. Text contains a line ending with '?' followed by option-like lines
+    ///      (bulleted, lettered, or numbered lists)
+    static func isTextAskingQuestion(_ message: ClaudeMessage) -> Bool {
+        guard let text = message.contentBlocks?
+            .last(where: { $0.type == "text" })?.text?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return false }
+
+        // Pattern 1: text ends with ?
+        if text.hasSuffix("?") || text.hasSuffix("?)") {
+            return true
+        }
+
+        // Pattern 2: text contains a ? line followed by option-like lines
+        let lines = text.components(separatedBy: "\n")
+        var foundQuestion = false
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasSuffix("?") || trimmed.hasSuffix("?)") {
+                foundQuestion = true
+            }
+            if foundQuestion {
+                // Check for option patterns after the question line
+                if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") ||
+                   trimmed.hasPrefix("A)") || trimmed.hasPrefix("B)") ||
+                   trimmed.hasPrefix("a)") || trimmed.hasPrefix("b)") ||
+                   trimmed.hasPrefix("1.") || trimmed.hasPrefix("1)") ||
+                   trimmed.hasPrefix("**A)") || trimmed.hasPrefix("**B)") ||
+                   trimmed.hasPrefix("- **A") || trimmed.hasPrefix("- **B") ||
+                   trimmed.hasPrefix("- **1") || trimmed.hasPrefix("- **2") {
+                    return true
+                }
+            }
+        }
+
+        return false
     }
 
     // MARK: - Session Permission Mode
@@ -411,16 +452,13 @@ final class ClaudeProvider: SessionProvider {
 
             case "end_turn":
                 // Check if Claude is asking a text-based question (c9watch heuristic):
-                // If the last text block ends with '?' and it's been > 20s (avoid
-                // streaming flicker), treat as waiting for user input.
+                // After 20s (to avoid streaming flicker), check if the last text block
+                // contains a question. Patterns:
+                //   1. Text ends with '?' or '?)'
+                //   2. Text contains '?' followed by option lines (A/B/C or - bullets)
                 let age = now.timeIntervalSince(lastEntry.timestamp)
-                if age > 20 {
-                    let lastText = message.contentBlocks?
-                        .last(where: { $0.type == "text" })?.text?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if lastText.hasSuffix("?") || lastText.hasSuffix("?)") {
-                        return .waitingForUser
-                    }
+                if age > 20, Self.isTextAskingQuestion(message) {
+                    return .waitingForUser
                 }
                 return .idle
 
