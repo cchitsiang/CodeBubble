@@ -394,7 +394,18 @@ final class ClaudeProvider: SessionProvider {
                 return .executingTool(toolName)
 
             case "end_turn":
-                // Claude finished its turn — this is idle, not "waiting for user"
+                // Check if Claude is asking a text-based question (c9watch heuristic):
+                // If the last text block ends with '?' and it's been > 20s (avoid
+                // streaming flicker), treat as waiting for user input.
+                let age = now.timeIntervalSince(lastEntry.timestamp)
+                if age > 20 {
+                    let lastText = message.contentBlocks?
+                        .last(where: { $0.type == "text" })?.text?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if lastText.hasSuffix("?") || lastText.hasSuffix("?)") {
+                        return .waitingForUser
+                    }
+                }
                 return .idle
 
             case nil:
