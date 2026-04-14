@@ -132,6 +132,27 @@ struct NotchPanelView: View {
                             }
                             .transition(.blurFade.combined(with: .move(edge: .top)))
                         }
+                    case .questionCard(let sessionId):
+                        if let q = appState.pendingHookQuestion, q.sessionId == sessionId {
+                            VStack(spacing: 0) {
+                                QuestionBar(
+                                    question: q.question,
+                                    options: q.options,
+                                    sessionSource: appState.sessions[sessionId]?.source,
+                                    projectName: appState.sessions[sessionId]?.projectDisplayName,
+                                    onAnswer: { appState.answerHookQuestion($0) },
+                                    onSkip: { appState.skipHookQuestion() }
+                                )
+                                if appState.sessions.count > 1 {
+                                    SessionsExpandLink(count: appState.sessions.count) {
+                                        withAnimation(NotchAnimation.open) {
+                                            appState.surface = .sessionList
+                                        }
+                                    }
+                                }
+                            }
+                            .transition(.blurFade.combined(with: .move(edge: .top)))
+                        }
                     case .completionCard:
                         SessionListView(appState: appState, onlySessionId: appState.justCompletedSessionId)
                             .transition(.blurFade.combined(with: .move(edge: .top)))
@@ -1732,5 +1753,125 @@ private struct PixelButton: View {
         }
         .buttonStyle(.plain)
         .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
+    }
+}
+
+// MARK: - Question Bar (AskUserQuestion via hook)
+
+private struct QuestionBar: View {
+    let question: String
+    let options: [String]?
+    let sessionSource: String?
+    let projectName: String?
+    let onAnswer: (String) -> Void
+    let onSkip: () -> Void
+
+    @State private var textInput = ""
+    @FocusState private var isFocused: Bool
+
+    private let cyan = Color(red: 0.4, green: 0.7, blue: 1.0)
+
+    var body: some View {
+        VStack(spacing: 8) {
+            // Context row
+            HStack(spacing: 6) {
+                if let src = sessionSource, let icon = cliIcon(source: src, size: 12) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .frame(width: 12, height: 12)
+                }
+                if let project = projectName {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text(project)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+
+            // Question text
+            HStack(spacing: 6) {
+                Text("?")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(cyan)
+                Text(question)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(3)
+                Spacer()
+            }
+            .padding(.horizontal, 14)
+
+            // Option buttons or free-text input
+            if let options, !options.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(options, id: \.self) { option in
+                        Button {
+                            onAnswer(option)
+                        } label: {
+                            Text(option)
+                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.9))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(Color.white.opacity(0.08))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                                )
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 14)
+            } else {
+                // Free-text input
+                HStack(spacing: 6) {
+                    TextField(L10n.shared["type_answer"], text: $textInput)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .focused($isFocused)
+                        .onSubmit {
+                            guard !textInput.isEmpty else { return }
+                            onAnswer(textInput)
+                        }
+                    Button {
+                        guard !textInput.isEmpty else { return }
+                        onAnswer(textInput)
+                    } label: {
+                        Text(L10n.shared["submit"])
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.black)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .background(Color(red: 0.29, green: 0.87, blue: 0.50))
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 14)
+            }
+
+            // Skip button
+            Button(action: onSkip) {
+                Text(L10n.shared["skip"])
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 2)
+        }
+        .padding(.vertical, 10)
+        .onAppear { isFocused = true }
     }
 }

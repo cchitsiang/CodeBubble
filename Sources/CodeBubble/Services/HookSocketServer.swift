@@ -118,6 +118,29 @@ final class HookSocketServer {
         let toolName = (json["tool_name"] as? String) ?? (json["toolName"] as? String) ?? "Tool"
         let toolInput = (json["tool_input"] as? [String: Any]) ?? [:]
 
+        // AskUserQuestion is a question, not a permission — route to QuestionBar
+        if toolName == "AskUserQuestion" {
+            let questionText = (toolInput["question"] as? String) ?? "Question"
+            var options: [String]?
+            if let strOpts = toolInput["options"] as? [String] {
+                options = strOpts
+            } else if let dictOpts = toolInput["options"] as? [[String: Any]] {
+                options = dictOpts.compactMap { $0["label"] as? String }
+            }
+            Task {
+                let responseData = await withCheckedContinuation { continuation in
+                    appState.enqueueHookQuestion(
+                        sessionId: sessionId,
+                        question: questionText,
+                        options: options,
+                        continuation: continuation
+                    )
+                }
+                self.send(connection: connection, data: responseData)
+            }
+            return
+        }
+
         Task {
             let responseData = await withCheckedContinuation { continuation in
                 appState.enqueueHookApproval(

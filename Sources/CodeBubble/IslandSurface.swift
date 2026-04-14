@@ -8,6 +8,8 @@ enum IslandSurface: Equatable {
     case completionCard(sessionId: String)
     /// Session is waiting for user to approve a tool in its terminal
     case approvalCard(sessionId: String)
+    /// Session is asking the user a question (AskUserQuestion tool)
+    case questionCard(sessionId: String)
 
     var isExpanded: Bool { self != .collapsed }
 
@@ -15,7 +17,7 @@ enum IslandSurface: Equatable {
     var sessionId: String? {
         switch self {
         case .collapsed, .sessionList: return nil
-        case .completionCard(let id), .approvalCard(let id): return id
+        case .completionCard(let id), .approvalCard(let id), .questionCard(let id): return id
         }
     }
 }

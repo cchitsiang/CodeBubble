@@ -10,3 +10,12 @@ struct HookApproval: Identifiable {
     let toolInput: [String: Any]
     let continuation: CheckedContinuation<Data, Never>
 }
+
+/// A question from the AskUserQuestion tool, received via hook.
+struct HookQuestion: Identifiable {
+    let id = UUID()
+    let sessionId: String
+    let question: String
+    let options: [String]?
+    let continuation: CheckedContinuation<Data, Never>
+}

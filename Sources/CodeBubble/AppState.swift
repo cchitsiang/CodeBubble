@@ -12,6 +12,8 @@ final class AppState {
     var surface: IslandSurface = .collapsed
     /// Queue of pending hook-based approvals (interactive). Head item is shown in ApprovalBar.
     var hookApprovalQueue: [HookApproval] = []
+    /// Queue of pending AskUserQuestion (interactive). Head item is shown in QuestionBar.
+    var hookQuestionQueue: [HookQuestion] = []
 
     var justCompletedSessionId: String? {
         if case .completionCard(let id) = surface { return id }
@@ -382,6 +384,76 @@ final class AppState {
             }
         }
         return nil
+    }
+
+    // MARK: - Hook-Based Questions (AskUserQuestion)
+
+    /// First pending question (if any).
+    var pendingHookQuestion: HookQuestion? { hookQuestionQueue.first }
+
+    /// Enqueue a question from the AskUserQuestion hook.
+    func enqueueHookQuestion(
+        sessionId: String,
+        question: String,
+        options: [String]?,
+        continuation: CheckedContinuation<Data, Never>
+    ) {
+        let q = HookQuestion(
+            sessionId: sessionId,
+            question: question,
+            options: options,
+            continuation: continuation
+        )
+        hookQuestionQueue.append(q)
+
+        surface = .questionCard(sessionId: sessionId)
+        activeSessionId = sessionId
+        SoundManager.shared.handleEvent("PermissionRequest")
+        sessions[sessionId]?.status = .waitingForUser
+        refreshDerivedState()
+    }
+
+    /// Answer the head question with the selected option text.
+    func answerHookQuestion(_ answer: String) {
+        guard !hookQuestionQueue.isEmpty else { return }
+        let head = hookQuestionQueue.removeFirst()
+
+        let obj: [String: Any] = [
+            "hookSpecificOutput": [
+                "hookEventName": "PermissionRequest",
+                "decision": [
+                    "behavior": "allow",
+                    "updatedInput": ["answers": ["answer": answer]]
+                ] as [String: Any]
+            ] as [String: Any]
+        ]
+        let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
+        head.continuation.resume(returning: data)
+
+        if let next = hookQuestionQueue.first {
+            surface = .questionCard(sessionId: next.sessionId)
+            activeSessionId = next.sessionId
+        } else {
+            surface = .collapsed
+        }
+        refreshDerivedState()
+    }
+
+    /// Skip the head question (sends deny/empty response).
+    func skipHookQuestion() {
+        guard !hookQuestionQueue.isEmpty else { return }
+        let head = hookQuestionQueue.removeFirst()
+
+        let data = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
+        head.continuation.resume(returning: data)
+
+        if let next = hookQuestionQueue.first {
+            surface = .questionCard(sessionId: next.sessionId)
+            activeSessionId = next.sessionId
+        } else {
+            surface = .collapsed
+        }
+        refreshDerivedState()
     }
 
     // MARK: - Provider-Driven Updates
