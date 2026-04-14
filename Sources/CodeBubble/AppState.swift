@@ -305,34 +305,29 @@ final class AppState {
         guard !hookApprovalQueue.isEmpty else { return }
         let head = hookApprovalQueue.removeFirst()
 
-        let response: [String: Any]
+        let responseData: Data
         if always {
-            response = [
+            // Match upstream CodeIsland format exactly
+            let obj: [String: Any] = [
                 "hookSpecificOutput": [
                     "hookEventName": "PermissionRequest",
                     "decision": [
                         "behavior": "allow",
-                        "updatedPermissions": [
-                            ["behavior": "allow", "tool": head.toolName, "scope": "session"]
-                        ]
-                    ]
-                ]
+                        "updatedPermissions": [[
+                            "type": "addRules",
+                            "rules": [["toolName": head.toolName, "ruleContent": "*"]],
+                            "behavior": "allow",
+                            "destination": "session"
+                        ]]
+                    ] as [String: Any]
+                ] as [String: Any]
             ]
+            responseData = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         } else {
-            response = [
-                "hookSpecificOutput": [
-                    "hookEventName": "PermissionRequest",
-                    "decision": ["behavior": "allow"]
-                ]
-            ]
+            responseData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#.utf8)
         }
 
-        if let data = try? JSONSerialization.data(withJSONObject: response) {
-            head.continuation.resume(returning: data)
-        } else {
-            head.continuation.resume(returning: Data("{}".utf8))
-        }
-
+        head.continuation.resume(returning: responseData)
         clearPendingApproval(for: head.sessionId, approved: true)
         showNextApprovalOrCollapse()
     }
