@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.2.0] — 2026-04-15
+
+### Added
+- **Subagent approval detection**: scan subagent JSONL (`sessionId/subagents/agent-*.jsonl`) when main session has Agent/Task tool pending to detect subagent tools waiting for approval
+- **Subagent auto-approve in hook server**: tools with `agent_id` in the hook payload are auto-approved (parent already approved spawning the subagent)
+- **Bypass permission auto-approve**: hooks with `permission_mode: bypassPermissions` or `acceptEdits` are auto-approved immediately
+- **Text question detection** (c9watch heuristic): assistant responses ending with `?` (or containing `?` in last 5 lines) detected as waiting for user answer after 20s
+- **Peer disconnect monitoring**: when the bridge process dies (Claude killed/timed out the hook), orphaned approval/question queue entries are cleaned up and the card dismisses
+- **Queue count badge** on ApprovalBar (`1/N`) when multiple approvals are pending
+- **Stale hook drain**: when a new hook arrives for a session, old pending hooks for that session are auto-resolved (prevents duplicate/stale queue entries)
+- Debug payload dump to `/tmp/hook-payload.json` in debug builds
+
+### Changed
+- **PixelButton uses `onTapGesture`** instead of `Button(action:)` — fixes taps not registering in `nonactivatingPanel` windows
+- Auto-approve list in hook server matches upstream: only internal meta-tools (Task*, Todo*, PlanMode), not Read/Glob/Grep
+- Passive approval detection uses `recentlyResolvedAnyApproval` (5s window) to suppress flash during active hook flow, while remaining available for app restart scenarios
+- "Always" approval response format matches upstream exactly (`type: addRules`, `destination: session`)
+
+### Fixed
+- Legacy `codebubble-hook.sh` entries cleaned from ALL hook events on install (was only cleaning PermissionRequest, leaving 12 stale entries causing "No such file or directory" errors)
+- Completion card no longer overwrites approval/question cards
+- Fast completions (< 3s response) detected via `lastActivity` timestamp tracking
+- Approval bar properly dismissed after Allow/Deny (was re-surfacing due to hover + JSONL re-detection race)
+- Hook approval state not overwritten by provider polls (both approval and question queues protected)
+- Question bar dismissed after answering with proper status transition to `.thinking`
+- Skip question sets status to `.thinking` and clears pending info
+- Session card tap shows QuestionBar when question is pending
+- "Answer in Terminal" label for AskUserQuestion fallback (was "Approve in Terminal")
+- Smooth dismiss transitions with `NotchAnimation.close`
+- Visual feedback on option select (✓ checkmark + accent background, 300ms delay before submit)
+
 ## [1.1.0] — 2026-04-14
 
 ### Added
