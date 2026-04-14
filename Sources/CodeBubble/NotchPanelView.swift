@@ -114,6 +114,7 @@ struct NotchPanelView: View {
                                     detail: session.pendingApprovalDetail,
                                     sessionSource: session.source,
                                     projectName: session.projectDisplayName,
+                                    queueCount: appState.hookApprovalQueue.count,
                                     isInteractive: appState.pendingHookApproval?.sessionId == sessionId,
                                     onJumpToTerminal: {
                                         TerminalActivator.activate(session: session, sessionId: sessionId)
@@ -1636,6 +1637,7 @@ private struct ApprovalBar: View {
     let detail: String?
     let sessionSource: String?
     let projectName: String?
+    let queueCount: Int
     /// When true, show Allow/Deny/Always buttons (hook-based).
     /// When false, show "Approve in Terminal" (passive detection only).
     let isInteractive: Bool
@@ -1667,7 +1669,7 @@ private struct ApprovalBar: View {
             }
             .padding(.horizontal, 14)
 
-            // Tool name
+            // Tool name + queue count
             HStack(spacing: 6) {
                 Text("!")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -1675,6 +1677,15 @@ private struct ApprovalBar: View {
                 Text(tool)
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(amber)
+                if queueCount > 1 {
+                    Text("1/\(queueCount)")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
                 Spacer()
             }
             .padding(.horizontal, 14)
@@ -1763,22 +1774,21 @@ private struct PixelButton: View {
     @State private var hovering = false
 
     var body: some View {
-        Button(action: action) {
-            Text(label)
-                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(fg)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 7)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(hovering ? bg.opacity(1.5) : bg)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(hovering ? border : border.opacity(0.4), lineWidth: 1)
-                )
-        }
-        .buttonStyle(.plain)
+        Text(label)
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(fg)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(hovering ? bg.opacity(1.5) : bg)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .strokeBorder(hovering ? border : border.opacity(0.4), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture { action() }
         .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
     }
 }
