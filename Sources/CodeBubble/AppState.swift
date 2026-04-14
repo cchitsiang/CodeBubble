@@ -34,6 +34,8 @@ final class AppState {
     private var completionQueue: [String] = []
     /// Track last observed activity per session to detect fast transitions missed by polling
     private var lastObservedActivity: [String: Date] = [:]
+    /// Sessions that already showed a completion card since their last non-idle state
+    private var completionShownSessions: Set<String> = [:]
     /// Sessions recently resolved via hook (approve/deny) — suppress JSONL-based approval for 10s
     private var recentlyResolvedApprovals: [String: Date] = [:]
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
@@ -631,8 +633,25 @@ final class AppState {
             let activityChanged = prevActivity == nil || session.lastActivity > prevActivity!
             lastObservedActivity[session.id] = session.lastActivity
 
-            let shouldComplete = (status == .idle && activityChanged && !isNew) || (wasActive && status == .idle)
+            // Clear completion-shown flag when session becomes active
+            if status != .idle {
+                completionShownSessions.remove(session.id)
+            }
+
+            // Completion: active→idle transition, OR fast idle→idle with new activity.
+            // Only fire once per idle period (completionShownSessions prevents re-trigger).
+            let shouldComplete: Bool
+            if completionShownSessions.contains(session.id) {
+                shouldComplete = false
+            } else if wasActive && status == .idle {
+                shouldComplete = true
+            } else if status == .idle && activityChanged && !isNew {
+                shouldComplete = true
+            } else {
+                shouldComplete = false
+            }
             if shouldComplete {
+                completionShownSessions.insert(session.id)
                 // If the "idle" session is actually a text question (? heuristic),
                 // show approval card with "Answer in Terminal" instead of completion.
                 // The 20s delay in determineActivity is for avoiding streaming flicker,
