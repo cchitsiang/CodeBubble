@@ -163,7 +163,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 withAnimation(NotchAnimation.close) { appState.surface = .collapsed }
             } else {
                 withAnimation(NotchAnimation.open) {
-                    if let pendingId = appState.pendingApprovalSessionId {
+                    if let q = appState.pendingHookQuestion {
+                        appState.surface = .questionCard(sessionId: q.sessionId)
+                        appState.activeSessionId = q.sessionId
+                    } else if let pendingId = appState.pendingApprovalSessionId {
                         appState.surface = .approvalCard(sessionId: pendingId)
                         appState.activeSessionId = pendingId
                     } else {

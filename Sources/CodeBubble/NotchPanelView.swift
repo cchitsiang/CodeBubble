@@ -250,8 +250,11 @@ struct NotchPanelView: View {
                             // Guard: mouse may have left during the delay
                             guard isHovered else { return }
                             withAnimation(NotchAnimation.open) {
-                                // Prefer approval card if any session is waiting for approval
-                                if let pendingId = appState.pendingApprovalSessionId {
+                                // Prefer question/approval card if any session is waiting
+                                if let q = appState.pendingHookQuestion {
+                                    appState.surface = .questionCard(sessionId: q.sessionId)
+                                    appState.activeSessionId = q.sessionId
+                                } else if let pendingId = appState.pendingApprovalSessionId {
                                     appState.surface = .approvalCard(sessionId: pendingId)
                                     appState.activeSessionId = pendingId
                                 } else {
