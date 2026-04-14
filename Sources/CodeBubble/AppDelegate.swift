@@ -129,18 +129,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Prompt the user for Accessibility permissions if not already granted.
-    /// `addGlobalMonitorForEvents` silently receives no events without this.
+    /// Check Accessibility permission silently (no prompt).
+    /// The Settings → Shortcuts page shows a banner if not granted.
     private func promptAccessibilityIfNeeded() {
-        // Check without prompting first
-        if AXIsProcessTrusted() {
-            wasAccessibilityGranted = true
-            return
-        }
-        // Not granted — show the system dialog
-        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-        wasAccessibilityGranted = AXIsProcessTrustedWithOptions(options)
-        Self.log.warning("Accessibility not granted — global shortcuts won't work until enabled in System Settings")
+        wasAccessibilityGranted = AXIsProcessTrusted()
     }
 
     /// Called on app activation — if the user just granted Accessibility, re-register shortcuts.
