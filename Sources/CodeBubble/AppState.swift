@@ -164,10 +164,18 @@ final class AppState {
 
     // MARK: - Completion Queue
 
+    private var isShowingInteractive: Bool {
+        switch surface {
+        case .approvalCard, .questionCard: return true
+        default: return false
+        }
+    }
+
     private func enqueueCompletion(_ sessionId: String) {
         if completionQueue.contains(sessionId) || justCompletedSessionId == sessionId { return }
 
-        if isShowingCompletion {
+        if isShowingCompletion || isShowingInteractive {
+            // Don't overwrite approval/question cards — queue for later
             completionQueue.append(sessionId)
         } else {
             showCompletion(sessionId)
