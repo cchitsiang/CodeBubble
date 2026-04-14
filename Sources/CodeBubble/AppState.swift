@@ -26,6 +26,8 @@ final class AppState {
     private var cleanupTimer: Timer?
     private var autoCollapseTask: Task<Void, Never>?
     private var completionQueue: [String] = []
+    /// Track last observed activity per session to detect fast transitions missed by polling
+    private var lastObservedActivity: [String: Date] = [:]
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
     var completionHasBeenEntered = false
     private var isShowingCompletion: Bool {
@@ -520,8 +522,16 @@ final class AppState {
                 SoundManager.shared.handleEvent("PermissionRequest")
             }
 
-            // Enqueue completion card when session transitions to idle
-            if wasActive && status == .idle {
+            // Enqueue completion card when session transitions to idle.
+            // Also detect fast completions missed by polling: if status is idle but
+            // lastActivity changed since last observation, Claude did work between polls.
+            let prevActivity = lastObservedActivity[session.id]
+            let activityChanged = prevActivity == nil || session.lastActivity > prevActivity!
+            lastObservedActivity[session.id] = session.lastActivity
+
+            if status == .idle && activityChanged && !isNew {
+                enqueueCompletion(session.id)
+            } else if wasActive && status == .idle {
                 enqueueCompletion(session.id)
             }
         }
