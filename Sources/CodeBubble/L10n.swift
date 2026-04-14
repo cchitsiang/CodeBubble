@@ -124,7 +124,7 @@ final class L10n: ObservableObject {
 
         // Mascots
         "preview_status": "Preview Status",
-        "processing": "Processing",
+        "processing": "Working",
         "idle": "Idle",
         "waiting_approval": "Waiting Approval",
         "mascot_speed": "Animation Speed",
@@ -186,8 +186,8 @@ final class L10n: ObservableObject {
         "remote_remove": "Remove",
 
         // About
-        "about_desc1": "Real-time AI coding agent status panel for macOS",
-        "about_desc2": "Supports 8 CLI/IDE tools via Unix socket IPC",
+        "about_desc1": "Status panel for AI coding agents in macOS notch",
+        "about_desc2": "Supports Claude Code, Codex, and OpenCode",
 
         // Window
         "settings_title": "CodeBubble Settings",
@@ -402,8 +402,8 @@ final class L10n: ObservableObject {
         "remote_remove": "删除",
 
         // About
-        "about_desc1": "macOS 实时 AI 编码 Agent 状态面板",
-        "about_desc2": "通过 Unix socket IPC 支持 8 种 CLI/IDE 工具",
+        "about_desc1": "macOS 刘海栏 AI 编码 Agent 状态面板",
+        "about_desc2": "支持 Claude Code、Codex 和 OpenCode",
 
         // Window
         "settings_title": "CodeBubble 设置",
