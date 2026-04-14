@@ -232,8 +232,21 @@ final class ClaudeProvider: SessionProvider {
                     return blocks.filter { $0.type == "text" }.compactMap { $0.text }.joined(separator: " ")
                 }
 
+            // If main session is executing Agent/Task, check subagent JSONL for pending approval
+            var effectiveActivity = activity
+            var subagentPendingTool: String?
+            var subagentPendingDetail: String?
+            if case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
+                let subagentDir = (filePath as NSString).deletingLastPathComponent + "/" + sessionId + "/subagents"
+                if let sub = checkSubagentForPendingApproval(dir: subagentDir, fm: fm, now: now) {
+                    effectiveActivity = .waitingForUser
+                    subagentPendingTool = sub.tool
+                    subagentPendingDetail = sub.detail
+                }
+            }
+
             var currentTool: String?
-            if case .executingTool(let name) = activity {
+            if case .executingTool(let name) = effectiveActivity {
                 currentTool = name
             }
 
@@ -262,13 +275,19 @@ final class ClaudeProvider: SessionProvider {
                 }
             }
 
+            // Override with subagent pending info if available
+            if let subTool = subagentPendingTool {
+                pendingTool = subTool
+                pendingDetail = subagentPendingDetail
+            }
+
             results.append(AgentSession(
                 id: sessionId,
                 source: source,
                 cwd: cwd,
                 model: model,
                 gitBranch: gitBranch,
-                activity: activity,
+                activity: effectiveActivity,
                 lastActivity: lastEntry.timestamp,
                 lastUserPrompt: lastUserPrompt,
                 lastAssistantMessage: lastAssistantMessage,
@@ -280,6 +299,51 @@ final class ClaudeProvider: SessionProvider {
         }
 
         return results
+    }
+
+    // MARK: - Subagent Approval Detection
+
+    private struct SubagentPending {
+        let tool: String
+        let detail: String?
+    }
+
+    /// Check the most recently modified subagent JSONL for a pending tool_use that needs approval.
+    private func checkSubagentForPendingApproval(dir: String, fm: FileManager, now: Date) -> SubagentPending? {
+        guard let files = try? fm.contentsOfDirectory(atPath: dir) else { return nil }
+
+        // Find the most recently modified agent-*.jsonl
+        var latestPath: String?
+        var latestMtime: Date = .distantPast
+        for file in files {
+            guard file.hasPrefix("agent-"), file.hasSuffix(".jsonl") else { continue }
+            let path = dir + "/" + file
+            if let attrs = try? fm.attributesOfItem(atPath: path),
+               let mtime = attrs[.modificationDate] as? Date, mtime > latestMtime {
+                latestMtime = mtime
+                latestPath = path
+            }
+        }
+
+        guard let path = latestPath else { return nil }
+
+        // Read last few entries
+        let entries = readRecentEntries(from: path, count: 5, fm: fm)
+        guard let last = entries.last, last.type == "assistant",
+              let msg = last.message, msg.stopReason == "tool_use" else { return nil }
+
+        // Check if any pending tool needs approval
+        let toolUses = msg.contentBlocks?.filter { $0.type == "tool_use" } ?? []
+        let needsApproval = toolUses.contains { block in
+            guard let name = block.toolName else { return false }
+            return !permissionChecker.isAutoApproved(tool: name, input: block.toolInput)
+        }
+
+        guard needsApproval, let lastTool = toolUses.last else { return nil }
+        return SubagentPending(
+            tool: lastTool.toolName ?? "Tool",
+            detail: Self.describeToolInput(toolName: lastTool.toolName, input: lastTool.toolInput)
+        )
     }
 
     // MARK: - Text Question Detection
