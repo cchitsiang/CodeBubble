@@ -121,6 +121,12 @@ final class HookSocketServer {
             return
         }
 
+        #if DEBUG
+        if let dumpData = try? JSONSerialization.data(withJSONObject: json, options: .prettyPrinted) {
+            try? dumpData.write(to: URL(fileURLWithPath: "/tmp/hook-payload.json"))
+        }
+        #endif
+
         let sessionId = (json["session_id"] as? String) ?? (json["sessionId"] as? String) ?? "default"
         let toolName = (json["tool_name"] as? String) ?? (json["toolName"] as? String) ?? "Tool"
         let toolInput = (json["tool_input"] as? [String: Any]) ?? [:]
