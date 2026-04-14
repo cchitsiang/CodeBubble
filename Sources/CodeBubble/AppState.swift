@@ -440,11 +440,22 @@ final class AppState {
         ]
         let data = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data("{}".utf8)
         head.continuation.resume(returning: data)
-        recentlyResolvedApprovals[head.sessionId] = Date()
 
-        if let next = hookQuestionQueue.first {
+        // Immediately transition (CodeIsland: status = .processing after answer)
+        recentlyResolvedApprovals[head.sessionId] = Date()
+        sessions[head.sessionId]?.status = .thinking
+        sessions[head.sessionId]?.pendingApprovalTool = nil
+        sessions[head.sessionId]?.pendingApprovalDetail = nil
+
+        // Show next pending item from any queue (CodeIsland's showNextPending pattern)
+        if let next = hookApprovalQueue.first {
+            surface = .approvalCard(sessionId: next.sessionId)
+            activeSessionId = next.sessionId
+        } else if let next = hookQuestionQueue.first {
             surface = .questionCard(sessionId: next.sessionId)
             activeSessionId = next.sessionId
+        } else if showNextPending() {
+            // completion card shown
         } else {
             surface = .collapsed
         }
