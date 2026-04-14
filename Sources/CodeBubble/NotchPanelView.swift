@@ -907,9 +907,19 @@ private struct SessionCard: View {
         return false
     }
 
+    /// True if this session has a pending question via hook.
+    private var hasPendingQuestion: Bool {
+        appState.pendingHookQuestion?.sessionId == sessionId
+    }
+
     var body: some View {
         Button {
-            if hasPendingApproval {
+            if hasPendingQuestion {
+                withAnimation(NotchAnimation.open) {
+                    appState.surface = .questionCard(sessionId: sessionId)
+                    appState.activeSessionId = sessionId
+                }
+            } else if hasPendingApproval {
                 withAnimation(NotchAnimation.open) {
                     appState.surface = .approvalCard(sessionId: sessionId)
                     appState.activeSessionId = sessionId
