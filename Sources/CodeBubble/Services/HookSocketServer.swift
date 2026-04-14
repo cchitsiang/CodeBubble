@@ -149,8 +149,6 @@ final class HookSocketServer {
         // Auto-approve subagent tool calls — the parent already approved spawning
         // the subagent, so its tools don't need separate user confirmation.
         if let agentId = json["agent_id"] as? String, !agentId.isEmpty {
-            #if DEBUG
-            #endif
             let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
             send(connection: connection, data: Data(response.utf8))
             return
