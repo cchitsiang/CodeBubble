@@ -31,37 +31,52 @@ struct TerminalActivator {
             return
         }
 
-        // Try to find a terminal with the matching CWD
-        let termApp = detectRunningTerminal()
-        let lower = termApp.lowercased()
+        // Use detected terminal bundle ID (from process tree), fallback to heuristic
+        let bundleId = session.terminalBundleId ?? detectRunningTerminalBundleId()
 
-        if lower == "ghostty" {
+        switch bundleId {
+        case "com.mitchellh.ghostty":
             activateGhostty(cwd: session.cwd, sessionId: sessionId, source: session.source)
-            return
-        }
-
-        if lower.contains("iterm") {
+        case "com.googlecode.iterm2":
             activateITermByCwd(cwd: session.cwd)
-            return
-        }
-
-        if lower.contains("terminal") {
+        case "com.apple.Terminal":
             activateTerminalAppByCwd(cwd: session.cwd)
-            return
-        }
-
-        if lower.contains("wezterm") || lower.contains("wez") {
+        case "dev.warp.Warp-Stable":
+            activateWarpByCwd(cwd: session.cwd)
+        case "com.github.wez.wezterm", "fun.tw93.kaku":
             activateWezTermByCwd(cwd: session.cwd)
-            return
-        }
-
-        if lower.contains("kitty") {
+        case "net.kovidgoyal.kitty":
             activateKittyByCwd(cwd: session.cwd, source: session.source)
-            return
+        case let id? where Self.vscodeFamilyBundleIds.contains(id):
+            activateVSCodeFamily(cwd: session.cwd, bundleId: id)
+        default:
+            if let id = bundleId {
+                activateByBundleId(id)
+            } else {
+                bringToFront(detectRunningTerminal())
+            }
         }
+    }
 
-        // Fallback: just bring the terminal to front
-        bringToFront(termApp)
+    private static let vscodeFamilyBundleIds: Set<String> = [
+        "com.microsoft.VSCode",
+        "com.microsoft.VSCodeInsiders",
+        "com.todesktop.230313mzl4w4u92",  // Cursor
+        "com.exafunction.windsurf",
+        "com.trae.app",
+    ]
+
+    private static let vscodeFamilyCLI: [String: String] = [
+        "com.microsoft.VSCode": "code",
+        "com.microsoft.VSCodeInsiders": "code-insiders",
+        "com.todesktop.230313mzl4w4u92": "cursor",
+        "com.exafunction.windsurf": "windsurf",
+        "com.trae.app": "trae",
+    ]
+
+    private static func detectRunningTerminalBundleId() -> String? {
+        let termName = detectRunningTerminal().lowercased()
+        return knownTerminals.first(where: { termName.contains($0.name.lowercased()) })?.bundleId
     }
 
     // MARK: - Ghostty
@@ -236,6 +251,65 @@ struct TerminalActivator {
         DispatchQueue.global(qos: .userInitiated).async {
             if runProcess(bin, args: ["@", "focus-tab", "--match", "cwd:\(cwd)"]) == nil {
                 _ = runProcess(bin, args: ["@", "focus-tab", "--match", "title:\(source)"])
+            }
+        }
+    }
+
+    // MARK: - Warp
+
+    private static func activateWarpByCwd(cwd: String?) {
+        guard let app = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "dev.warp.Warp-Stable"
+        }) else {
+            bringToFront("Warp")
+            return
+        }
+        if app.isHidden { app.unhide() }
+        app.activate()
+        guard let cwd = cwd, !cwd.isEmpty else { return }
+
+        // Warp doesn't expose AppleScript/CLI for tab selection.
+        // Best effort: use its "Go to Tab" by CWD heuristic via AppleScript
+        // to cycle tabs and check window title.
+        let dirName = escapeAppleScript((cwd as NSString).lastPathComponent)
+        let script = """
+        tell application "System Events"
+            tell process "Warp"
+                set frontmost to true
+                -- Check if current window title contains the project dir
+                try
+                    set winTitle to name of front window
+                    if winTitle contains "\(dirName)" then return
+                end try
+                -- Cycle through tabs to find the right one
+                repeat 20 times
+                    keystroke "]" using {command down, shift down}
+                    delay 0.15
+                    try
+                        set winTitle to name of front window
+                        if winTitle contains "\(dirName)" then return
+                    end try
+                end repeat
+            end tell
+        end tell
+        """
+        runAppleScript(script)
+    }
+
+    // MARK: - VS Code / Cursor / Windsurf / Trae
+
+    private static func activateVSCodeFamily(cwd: String?, bundleId: String) {
+        guard let cwd = cwd, !cwd.isEmpty,
+              let cli = vscodeFamilyCLI[bundleId] else {
+            activateByBundleId(bundleId)
+            return
+        }
+        // Use CLI to open the workspace in the existing window
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let bin = findBinary(cli) {
+                _ = runProcess(bin, args: ["-r", cwd])
+            } else {
+                DispatchQueue.main.async { activateByBundleId(bundleId) }
             }
         }
     }
