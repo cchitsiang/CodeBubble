@@ -285,44 +285,22 @@ final class ClaudeProvider: SessionProvider {
     // MARK: - Text Question Detection
 
     /// Detect if an assistant message is asking the user a text-based question.
-    /// Patterns (from c9watch):
-    ///   1. Last text block ends with '?' or '?)'
-    ///   2. Text contains a line ending with '?' followed by option-like lines
-    ///      (bulleted, lettered, or numbered lists)
+    /// Checks if the last text block contains a `?` in its final lines.
+    /// Safe because this is only called for `stop_reason == "end_turn"` entries
+    /// that are > 20 seconds old (streaming is finished, process is alive).
     static func isTextAskingQuestion(_ message: ClaudeMessage) -> Bool {
         guard let text = message.contentBlocks?
             .last(where: { $0.type == "text" })?.text?
             .trimmingCharacters(in: .whitespacesAndNewlines),
               !text.isEmpty else { return false }
 
-        // Pattern 1: text ends with ?
-        if text.hasSuffix("?") || text.hasSuffix("?)") {
-            return true
-        }
-
-        // Pattern 2: text contains a ? line followed by option-like lines
+        // Check if any of the last 5 non-empty lines contains '?'
+        // Covers: question at end, question + options, question + alternative suggestion
         let lines = text.components(separatedBy: "\n")
-        var foundQuestion = false
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasSuffix("?") || trimmed.hasSuffix("?)") {
-                foundQuestion = true
-            }
-            if foundQuestion {
-                // Check for option patterns after the question line
-                if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") ||
-                   trimmed.hasPrefix("A)") || trimmed.hasPrefix("B)") ||
-                   trimmed.hasPrefix("a)") || trimmed.hasPrefix("b)") ||
-                   trimmed.hasPrefix("1.") || trimmed.hasPrefix("1)") ||
-                   trimmed.hasPrefix("**A)") || trimmed.hasPrefix("**B)") ||
-                   trimmed.hasPrefix("- **A") || trimmed.hasPrefix("- **B") ||
-                   trimmed.hasPrefix("- **1") || trimmed.hasPrefix("- **2") {
-                    return true
-                }
-            }
-        }
-
-        return false
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        let tail = lines.suffix(5)
+        return tail.contains { $0.contains("?") }
     }
 
     // MARK: - Session Permission Mode
