@@ -1718,12 +1718,13 @@ private struct ApprovalBar: View {
                 }
                 .padding(.horizontal, 14)
             } else {
-                // Passive: jump to terminal to approve there
+                // Passive: jump to terminal to act there
+                let isQuestion = tool == "AskUserQuestion"
                 Button(action: onJumpToTerminal) {
                     HStack(spacing: 6) {
                         Image(systemName: "terminal.fill")
                             .font(.system(size: 10))
-                        Text("Approve in Terminal →")
+                        Text(isQuestion ? "Answer in Terminal →" : "Approve in Terminal →")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     }
                     .foregroundStyle(.white.opacity(0.95))
