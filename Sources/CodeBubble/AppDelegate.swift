@@ -140,10 +140,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Check Accessibility permission silently (no prompt).
-    /// The Settings → Shortcuts page shows a banner if not granted.
+    /// On first launch, prompt for Accessibility. After that, check silently.
     private func promptAccessibilityIfNeeded() {
-        wasAccessibilityGranted = AXIsProcessTrusted()
+        let key = "hasPromptedAccessibility"
+        if !UserDefaults.standard.bool(forKey: key) {
+            // First launch — show the system dialog once
+            UserDefaults.standard.set(true, forKey: key)
+            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+            wasAccessibilityGranted = AXIsProcessTrustedWithOptions(options)
+        } else {
+            // Subsequent launches — check silently
+            wasAccessibilityGranted = AXIsProcessTrusted()
+        }
     }
 
     /// Called on app activation — if the user just granted Accessibility, re-register shortcuts.
