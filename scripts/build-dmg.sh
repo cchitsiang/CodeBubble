@@ -75,12 +75,12 @@ echo "==> App bundle assembled at $APP_DIR"
 
 # Ad-hoc sign with stable identifier so Accessibility persists across installs.
 # For distribution, set SIGN_ID to a Developer ID certificate.
+# Sign with Developer ID for distribution, or ad-hoc for local use.
+# Only Developer ID + notarization avoids Gatekeeper blocks.
+# Ad-hoc: users must run `xattr -cr /Applications/CodeBubble.app`
 SIGN_ID="${SIGN_ID:-}"
 if [ -z "$SIGN_ID" ]; then
     SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
-fi
-if [ -z "$SIGN_ID" ]; then
-    SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep -v "REVOKED" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
 fi
 
 if [ -n "$SIGN_ID" ]; then
@@ -95,7 +95,7 @@ if [ -n "$SIGN_ID" ]; then
         --entitlements "$REPO_ROOT/CodeBubble.entitlements" \
         "$APP_DIR"
 else
-    echo "==> Ad-hoc signing (no certificate found)"
+    echo "==> Ad-hoc signing (no Developer ID found)"
     codesign --force --sign - \
         --identifier "com.codebubble.bridge" \
         "$CONTENTS_DIR/Helpers/codebubble-bridge"

@@ -71,16 +71,13 @@ for bundle in .build/*/release/*.bundle; do
     fi
 done
 
-# Use SIGN_ID env var, or auto-detect: prefer "Developer ID Application" for distribution,
-# fall back to any valid identity, then ad-hoc
+# Use SIGN_ID env var, or auto-detect Developer ID Application only.
+# Apple Development certs cause "contains malware" on Gatekeeper.
 if [ -z "$SIGN_ID" ]; then
     SIGN_ID=$(security find-identity -v -p codesigning | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || true)
 fi
 if [ -z "$SIGN_ID" ]; then
-    SIGN_ID=$(security find-identity -v -p codesigning | grep -v "REVOKED" | head -1 | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || true)
-fi
-if [ -z "$SIGN_ID" ]; then
-    echo "No developer certificate found, using ad-hoc signing..."
+    echo "No Developer ID certificate found, using ad-hoc signing..."
     SIGN_ID="-"
 fi
 
