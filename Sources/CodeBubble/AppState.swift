@@ -36,6 +36,9 @@ final class AppState {
         if case .completionCard = surface { return true }
         return false
     }
+    /// Timestamp of last hook approval/deny/skip action — suppresses passive
+    /// approval surfacing briefly so the hook gets first chance on sequential tools.
+    private var lastHookActionTime: Date = .distantPast
 
     var rotatingSessionId: String?
     var rotatingSession: SessionSnapshot? {
@@ -355,6 +358,7 @@ final class AppState {
     }
 
     private func clearPendingApproval(for sessionId: String, approved: Bool) {
+        lastHookActionTime = Date()
         // Only clear session's pending info if no other approval exists for this session
         let stillPending = hookApprovalQueue.contains { $0.sessionId == sessionId }
         if !stillPending {
@@ -677,6 +681,11 @@ final class AppState {
     var pendingApprovalSessionId: String? {
         if let head = hookApprovalQueue.first {
             return head.sessionId
+        }
+        // Suppress passive approvals briefly after a hook action — gives the next
+        // hook a chance to fire before we fall back to "Approve in Terminal".
+        if Date().timeIntervalSince(lastHookActionTime) < 5 {
+            return nil
         }
         // JSONL-detected: skip sessions recently resolved (avoids re-surfacing after Allow/Deny)
         return sessions
