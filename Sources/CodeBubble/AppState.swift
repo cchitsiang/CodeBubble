@@ -23,6 +23,12 @@ final class AppState {
     /// First-in-line interactive approval (if any).
     var pendingHookApproval: HookApproval? { hookApprovalQueue.first }
 
+    /// True if any approval was resolved via hook within the last 5 seconds.
+    /// Used to suppress the passive "Approve in Terminal" flash during active hook flow.
+    var recentlyResolvedAnyApproval: Bool {
+        recentlyResolvedApprovals.values.contains { Date().timeIntervalSince($0) < 5 }
+    }
+
     private var cleanupTimer: Timer?
     private var autoCollapseTask: Task<Void, Never>?
     private var completionQueue: [String] = []
@@ -631,7 +637,7 @@ final class AppState {
                 // show approval card with "Answer in Terminal" instead of completion.
                 // The 20s delay in determineActivity is for avoiding streaming flicker,
                 // but at completion time streaming is already done.
-                if !HookInstaller.isInstalled() && session.pendingApprovalTool == "AskUserQuestion" {
+                if session.pendingApprovalTool == "AskUserQuestion" {
                     sessions[session.id]?.status = .waitingForUser
                     sessions[session.id]?.pendingApprovalTool = session.pendingApprovalTool
                     sessions[session.id]?.pendingApprovalDetail = session.pendingApprovalDetail
@@ -679,14 +685,14 @@ final class AppState {
         if let head = hookApprovalQueue.first {
             return head.sessionId
         }
-        // When hooks are installed, don't show passive "Approve in Terminal" —
-        // the hook will fire and show the interactive ApprovalBar.
-        // Passive fallback is only for setups without hooks.
-        if HookInstaller.isInstalled() {
+        // Skip passive surfacing briefly after a hook action (prevents flash)
+        if recentlyResolvedAnyApproval {
             return nil
         }
+        // Passive fallback: JSONL-detected waiting sessions (e.g., app restart)
         return sessions
             .filter { $0.value.status == .waitingForUser && $0.value.pendingApprovalTool != nil }
+            .filter { recentlyResolvedApprovals[$0.key] == nil }
             .max { a, b in a.value.lastActivity < b.value.lastActivity }?
             .key
     }

@@ -909,9 +909,7 @@ private struct SessionCard: View {
     /// True if this session has a pending approval (either hook-based or JSONL-detected).
     private var hasPendingApproval: Bool {
         if appState.pendingHookApproval?.sessionId == sessionId { return true }
-        // Passive fallback only when hooks aren't installed
-        if !HookInstaller.isInstalled(),
-           session.status == .waitingForUser, session.pendingApprovalTool != nil { return true }
+        if session.status == .waitingForUser && session.pendingApprovalTool != nil { return true }
         return false
     }
 
@@ -1736,8 +1734,9 @@ private struct ApprovalBar: View {
                                 action: onAllowAlways)
                 }
                 .padding(.horizontal, 14)
-            } else if !HookInstaller.isInstalled() {
-                // Passive fallback (no hooks): jump to terminal to act there
+            } else if !appState.recentlyResolvedAnyApproval {
+                // Passive fallback: jump to terminal to act there.
+                // Hidden briefly after a hook action to prevent one-frame flash.
                 let isQuestion = tool == "AskUserQuestion"
                 Button(action: onJumpToTerminal) {
                     HStack(spacing: 6) {

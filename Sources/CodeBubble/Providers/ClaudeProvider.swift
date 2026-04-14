@@ -238,8 +238,7 @@ final class ClaudeProvider: SessionProvider {
             var effectiveActivity = activity
             var subagentPendingTool: String?
             var subagentPendingDetail: String?
-            if !HookInstaller.isInstalled(),
-               case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
+            if case .executingTool(let toolName) = activity, toolName == "Agent" || toolName == "Task" {
                 let subagentDir = (filePath as NSString).deletingLastPathComponent + "/" + sessionId + "/subagents"
                 if let sub = checkSubagentForPendingApproval(dir: subagentDir, fm: fm, now: now) {
                     effectiveActivity = .waitingForUser
@@ -262,9 +261,8 @@ final class ClaudeProvider: SessionProvider {
                     // Tool-based waiting (permission or AskUserQuestion)
                     pendingTool = lastToolUse.toolName
                     pendingDetail = Self.describeToolInput(toolName: lastToolUse.toolName, input: lastToolUse.toolInput)
-                } else if !HookInstaller.isInstalled(),
-                          lastMsg.stopReason == "end_turn", Self.isTextAskingQuestion(lastMsg) {
-                    // Text-based question (? heuristic) — only in passive mode (no hooks).
+                } else if lastMsg.stopReason == "end_turn", Self.isTextAskingQuestion(lastMsg) {
+                    // Text-based question (? heuristic) — passive fallback for app restart.
                     let lastText = lastMsg.contentBlocks?
                         .last(where: { $0.type == "text" })?.text?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -495,14 +493,11 @@ final class ClaudeProvider: SessionProvider {
                 return .executingTool(toolName)
 
             case "end_turn":
-                // When hooks are installed, skip the ? heuristic — AskUserQuestion
-                // is handled via hook, and text questions are just normal responses.
-                // Only use the heuristic when hooks are NOT installed (passive-only mode).
-                if !HookInstaller.isInstalled() {
-                    let age = now.timeIntervalSince(lastEntry.timestamp)
-                    if age > 20, Self.isTextAskingQuestion(message) {
-                        return .waitingForUser
-                    }
+                // Text question heuristic: if last text contains ? and age > 20s,
+                // treat as waiting for user. Works as passive fallback (e.g., app restart).
+                let age = now.timeIntervalSince(lastEntry.timestamp)
+                if age > 20, Self.isTextAskingQuestion(message) {
+                    return .waitingForUser
                 }
                 return .idle
 
