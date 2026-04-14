@@ -18,8 +18,14 @@ private class NotchHostingView<Content: View>: NSHostingView<Content> {
     private var applyingDeferred = false
 
     override func mouseDown(with event: NSEvent) {
-        window?.makeKey()
+        if window?.isKeyWindow == false {
+            window?.makeKeyAndOrderFront(nil)
+        }
         super.mouseDown(with: event)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        super.mouseUp(with: event)
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
