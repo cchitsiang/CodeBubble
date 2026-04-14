@@ -259,10 +259,9 @@ final class ClaudeProvider: SessionProvider {
                     // Tool-based waiting (permission or AskUserQuestion)
                     pendingTool = lastToolUse.toolName
                     pendingDetail = Self.describeToolInput(toolName: lastToolUse.toolName, input: lastToolUse.toolInput)
-                } else if lastMsg.stopReason == "end_turn", Self.isTextAskingQuestion(lastMsg) {
-                    // Text-based question (? heuristic) — always populate pending info
-                    // so AppState can show "Answer in Terminal" on completion card even
-                    // before the 20s waitingForUser threshold kicks in.
+                } else if !HookInstaller.isInstalled(),
+                          lastMsg.stopReason == "end_turn", Self.isTextAskingQuestion(lastMsg) {
+                    // Text-based question (? heuristic) — only in passive mode (no hooks).
                     let lastText = lastMsg.contentBlocks?
                         .last(where: { $0.type == "text" })?.text?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -493,14 +492,14 @@ final class ClaudeProvider: SessionProvider {
                 return .executingTool(toolName)
 
             case "end_turn":
-                // Check if Claude is asking a text-based question (c9watch heuristic):
-                // After 20s (to avoid streaming flicker), check if the last text block
-                // contains a question. Patterns:
-                //   1. Text ends with '?' or '?)'
-                //   2. Text contains '?' followed by option lines (A/B/C or - bullets)
-                let age = now.timeIntervalSince(lastEntry.timestamp)
-                if age > 20, Self.isTextAskingQuestion(message) {
-                    return .waitingForUser
+                // When hooks are installed, skip the ? heuristic — AskUserQuestion
+                // is handled via hook, and text questions are just normal responses.
+                // Only use the heuristic when hooks are NOT installed (passive-only mode).
+                if !HookInstaller.isInstalled() {
+                    let age = now.timeIntervalSince(lastEntry.timestamp)
+                    if age > 20, Self.isTextAskingQuestion(message) {
+                        return .waitingForUser
+                    }
                 }
                 return .idle
 

@@ -631,7 +631,7 @@ final class AppState {
                 // show approval card with "Answer in Terminal" instead of completion.
                 // The 20s delay in determineActivity is for avoiding streaming flicker,
                 // but at completion time streaming is already done.
-                if session.pendingApprovalTool == "AskUserQuestion" {
+                if !HookInstaller.isInstalled() && session.pendingApprovalTool == "AskUserQuestion" {
                     sessions[session.id]?.status = .waitingForUser
                     sessions[session.id]?.pendingApprovalTool = session.pendingApprovalTool
                     sessions[session.id]?.pendingApprovalDetail = session.pendingApprovalDetail
