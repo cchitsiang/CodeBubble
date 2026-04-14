@@ -367,8 +367,15 @@ final class AppState {
         if let next = hookApprovalQueue.first {
             surface = .approvalCard(sessionId: next.sessionId)
             activeSessionId = next.sessionId
+        } else if let next = hookQuestionQueue.first {
+            surface = .questionCard(sessionId: next.sessionId)
+            activeSessionId = next.sessionId
+        } else if showNextPending() {
+            // completion card shown
         } else {
-            surface = .collapsed
+            withAnimation(NotchAnimation.close) {
+                surface = .collapsed
+            }
         }
         refreshDerivedState()
     }

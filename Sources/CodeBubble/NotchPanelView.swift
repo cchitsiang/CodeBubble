@@ -1967,15 +1967,23 @@ private struct QuestionBar: View {
         collectedAnswers[item.answerKey] = answer
 
         if currentQuestionIndex + 1 < items.count {
-            withAnimation(NotchAnimation.micro) {
-                currentQuestionIndex += 1
-                selectedIndex = nil
-                textInput = ""
-                showOtherInput = false
-                otherText = ""
+            // Brief pause to show selection, then advance
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                withAnimation(NotchAnimation.micro) {
+                    currentQuestionIndex += 1
+                    selectedIndex = nil
+                    textInput = ""
+                    showOtherInput = false
+                    otherText = ""
+                }
             }
         } else {
-            onAnswer(collectedAnswers)
+            // Brief pause to show checkmark, then submit + dismiss
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(NotchAnimation.close) {
+                    onAnswer(collectedAnswers)
+                }
+            }
         }
     }
 
@@ -2004,20 +2012,23 @@ private struct OptionRow: View {
     let action: () -> Void
     @State private var hovering = false
 
+    private var active: Bool { isSelected || hovering }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Text(hovering ? "▸" : " ")
+                // Arrow / checkmark
+                Text(isSelected ? "✓" : (hovering ? "▸" : " "))
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(accent)
+                    .foregroundStyle(isSelected ? Color(red: 0.29, green: 0.87, blue: 0.50) : accent)
                     .frame(width: 10)
                 Text(index > 0 ? "\(index)." : "…")
                     .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(accent.opacity(hovering ? 1 : 0.6))
+                    .foregroundStyle(accent.opacity(active ? 1 : 0.6))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(label)
-                        .font(.system(size: 10.5, weight: hovering ? .semibold : .regular, design: .monospaced))
-                        .foregroundStyle(.white.opacity(hovering ? 1 : 0.75))
+                        .font(.system(size: 10.5, weight: active ? .semibold : .regular, design: .monospaced))
+                        .foregroundStyle(.white.opacity(active ? 1 : 0.75))
                     if let description, !description.isEmpty {
                         Text(description)
                             .font(.system(size: 9, design: .monospaced))
@@ -2031,14 +2042,15 @@ private struct OptionRow: View {
             .padding(.vertical, 7)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(hovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
+                    .fill(isSelected ? accent.opacity(0.15) : (hovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03)))
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(hovering ? accent.opacity(0.4) : Color.clear, lineWidth: 1)
+                    .strokeBorder(isSelected ? accent.opacity(0.6) : (hovering ? accent.opacity(0.4) : Color.clear), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
         .onHover { h in withAnimation(NotchAnimation.micro) { hovering = h } }
+        .animation(NotchAnimation.micro, value: isSelected)
     }
 }
