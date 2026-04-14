@@ -28,6 +28,8 @@ final class AppState {
     private var completionQueue: [String] = []
     /// Track last observed activity per session to detect fast transitions missed by polling
     private var lastObservedActivity: [String: Date] = [:]
+    /// Sessions recently resolved via hook (approve/deny) — suppress JSONL-based approval for 10s
+    private var recentlyResolvedApprovals: [String: Date] = [:]
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
     var completionHasBeenEntered = false
     private var isShowingCompletion: Bool {
@@ -331,7 +333,7 @@ final class AppState {
             head.continuation.resume(returning: Data("{}".utf8))
         }
 
-        clearPendingApproval(for: head.sessionId)
+        clearPendingApproval(for: head.sessionId, approved: true)
         showNextApprovalOrCollapse()
     }
 
@@ -343,16 +345,21 @@ final class AppState {
         let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#
         head.continuation.resume(returning: Data(response.utf8))
 
-        clearPendingApproval(for: head.sessionId)
+        clearPendingApproval(for: head.sessionId, approved: false)
         showNextApprovalOrCollapse()
     }
 
-    private func clearPendingApproval(for sessionId: String) {
+    private func clearPendingApproval(for sessionId: String, approved: Bool) {
         // Only clear session's pending info if no other approval exists for this session
         let stillPending = hookApprovalQueue.contains { $0.sessionId == sessionId }
         if !stillPending {
             sessions[sessionId]?.pendingApprovalTool = nil
             sessions[sessionId]?.pendingApprovalDetail = nil
+            // Immediately transition status (CodeIsland approach) so the UI doesn't
+            // show stale approval state while JSONL catches up with tool_result.
+            sessions[sessionId]?.status = approved ? .running : .idle
+            // Suppress JSONL-based re-detection until the next meaningful JSONL update
+            recentlyResolvedApprovals[sessionId] = Date()
         }
     }
 
@@ -497,8 +504,25 @@ final class AppState {
             // don't let provider polling overwrite the waiting state or pending tool info.
             let hasHookApproval = hookApprovalQueue.contains { $0.sessionId == session.id }
 
+            // After hook approve/deny, suppress JSONL re-detection for 10s while
+            // Claude runs the tool and writes tool_result (CodeIsland approach:
+            // immediately set .running on approve, let next JSONL update correct it).
+            let recentlyResolved: Bool
+            if let resolvedAt = recentlyResolvedApprovals[session.id] {
+                if Date().timeIntervalSince(resolvedAt) < 10 {
+                    recentlyResolved = true
+                } else {
+                    recentlyResolvedApprovals.removeValue(forKey: session.id)
+                    recentlyResolved = false
+                }
+            } else {
+                recentlyResolved = false
+            }
+
             if hasHookApproval {
                 sessions[session.id]?.status = .waitingForUser
+            } else if recentlyResolved && status == .waitingForUser {
+                // Suppress: JSONL still shows old tool_use but we already resolved it
             } else {
                 sessions[session.id]?.status = status
                 sessions[session.id]?.pendingApprovalTool = session.pendingApprovalTool
