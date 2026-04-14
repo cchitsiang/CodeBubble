@@ -579,10 +579,26 @@ final class AppState {
             let activityChanged = prevActivity == nil || session.lastActivity > prevActivity!
             lastObservedActivity[session.id] = session.lastActivity
 
-            if status == .idle && activityChanged && !isNew {
-                enqueueCompletion(session.id)
-            } else if wasActive && status == .idle {
-                enqueueCompletion(session.id)
+            let shouldComplete = (status == .idle && activityChanged && !isNew) || (wasActive && status == .idle)
+            if shouldComplete {
+                // If the "idle" session is actually a text question (? heuristic),
+                // show approval card with "Answer in Terminal" instead of completion.
+                // The 20s delay in determineActivity is for avoiding streaming flicker,
+                // but at completion time streaming is already done.
+                if session.pendingApprovalTool == "AskUserQuestion" {
+                    sessions[session.id]?.status = .waitingForUser
+                    sessions[session.id]?.pendingApprovalTool = session.pendingApprovalTool
+                    sessions[session.id]?.pendingApprovalDetail = session.pendingApprovalDetail
+                    if !isShowingInteractive {
+                        surface = .approvalCard(sessionId: session.id)
+                        activeSessionId = session.id
+                        SoundManager.shared.handleEvent("PermissionRequest")
+                    }
+                } else if status == .waitingForUser && session.pendingApprovalTool != nil {
+                    // Tool-based waiting detected at completion boundary
+                } else {
+                    enqueueCompletion(session.id)
+                }
             }
         }
 

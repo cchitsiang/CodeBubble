@@ -240,20 +240,20 @@ final class ClaudeProvider: SessionProvider {
             // Extract pending tool info for approval/question UI
             var pendingTool: String?
             var pendingDetail: String?
-            if activity == .waitingForUser,
-               let lastMsg = entries.last(where: { $0.type == "assistant" })?.message {
-                if lastMsg.stopReason == "tool_use",
+            if let lastMsg = entries.last(where: { $0.type == "assistant" })?.message {
+                if activity == .waitingForUser, lastMsg.stopReason == "tool_use",
                    let lastToolUse = lastMsg.contentBlocks?.last(where: { $0.type == "tool_use" }) {
                     // Tool-based waiting (permission or AskUserQuestion)
                     pendingTool = lastToolUse.toolName
                     pendingDetail = Self.describeToolInput(toolName: lastToolUse.toolName, input: lastToolUse.toolInput)
                 } else if lastMsg.stopReason == "end_turn", Self.isTextAskingQuestion(lastMsg) {
-                    // Text-based question (? heuristic) — show as question needing answer
+                    // Text-based question (? heuristic) — always populate pending info
+                    // so AppState can show "Answer in Terminal" on completion card even
+                    // before the 20s waitingForUser threshold kicks in.
                     let lastText = lastMsg.contentBlocks?
                         .last(where: { $0.type == "text" })?.text?
                         .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                     pendingTool = "AskUserQuestion"
-                    // Extract the first line that ends with ?
                     let lines = lastText.components(separatedBy: "\n")
                     pendingDetail = lines.first(where: {
                         let t = $0.trimmingCharacters(in: .whitespaces)
