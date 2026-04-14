@@ -237,15 +237,31 @@ final class ClaudeProvider: SessionProvider {
                 currentTool = name
             }
 
-            // Extract pending tool info for approval UI
+            // Extract pending tool info for approval/question UI
             var pendingTool: String?
             var pendingDetail: String?
             if activity == .waitingForUser,
-               let lastMsg = entries.last(where: { $0.type == "assistant" })?.message,
-               lastMsg.stopReason == "tool_use",
-               let lastToolUse = lastMsg.contentBlocks?.last(where: { $0.type == "tool_use" }) {
-                pendingTool = lastToolUse.toolName
-                pendingDetail = Self.describeToolInput(toolName: lastToolUse.toolName, input: lastToolUse.toolInput)
+               let lastMsg = entries.last(where: { $0.type == "assistant" })?.message {
+                if lastMsg.stopReason == "tool_use",
+                   let lastToolUse = lastMsg.contentBlocks?.last(where: { $0.type == "tool_use" }) {
+                    // Tool-based waiting (permission or AskUserQuestion)
+                    pendingTool = lastToolUse.toolName
+                    pendingDetail = Self.describeToolInput(toolName: lastToolUse.toolName, input: lastToolUse.toolInput)
+                } else if lastMsg.stopReason == "end_turn" {
+                    // Text-based question (? heuristic) — show as question needing answer
+                    let lastText = lastMsg.contentBlocks?
+                        .last(where: { $0.type == "text" })?.text?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if lastText.hasSuffix("?") || lastText.hasSuffix("?)") {
+                        pendingTool = "AskUserQuestion"
+                        // Extract the question — take the last line that ends with ?
+                        let lines = lastText.components(separatedBy: "\n")
+                        pendingDetail = lines.last(where: {
+                            let t = $0.trimmingCharacters(in: .whitespaces)
+                            return t.hasSuffix("?") || t.hasSuffix("?)")
+                        })?.trimmingCharacters(in: .whitespaces)
+                    }
+                }
             }
 
             results.append(AgentSession(
