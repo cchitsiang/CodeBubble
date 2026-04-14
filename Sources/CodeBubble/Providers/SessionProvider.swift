@@ -54,6 +54,9 @@ struct AgentSession {
     /// Human-readable description of the current tool invocation, if any.
     let toolDescription: String?
 
+    /// Bundle ID of the terminal app running this session (e.g. "dev.warp.Warp-Stable").
+    var terminalBundleId: String? = nil
+
     /// Name of the tool awaiting approval (e.g. "Bash"), if activity == .waitingForUser for a permission request.
     var pendingApprovalTool: String? = nil
 

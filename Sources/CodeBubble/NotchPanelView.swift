@@ -1224,7 +1224,8 @@ private struct TerminalBadge: View {
     private static var termIconCache: [String: NSImage] = [:]
 
     private var termIcon: NSImage? {
-        let bid = Self.sourceBundleIds[session.source]
+        // Prefer detected terminal bundle ID, fall back to source-based lookup
+        let bid = session.terminalBundleId ?? Self.sourceBundleIds[session.source]
         guard let bid else { return nil }
         if let cached = Self.termIconCache[bid] { return cached }
         guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) else { return nil }

@@ -12,6 +12,7 @@ public struct SessionSnapshot {
     public var lastUserPrompt: String?
     public var lastAssistantMessage: String?
     public var source: String = "claude"
+    public var terminalBundleId: String?
     /// Tool name awaiting approval (only set when status == .waitingForUser)
     public var pendingApprovalTool: String?
     /// Short description of the pending tool invocation

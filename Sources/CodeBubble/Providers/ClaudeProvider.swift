@@ -144,6 +144,9 @@ final class ClaudeProvider: SessionProvider {
     /// Cache: JSONL file path → session permissionMode (read from file header once).
     private var sessionPermissionModes: [String: String] = [:]
 
+    /// Cache: PID → terminal bundle ID (detected from process tree once).
+    private var pidTerminalCache: [pid_t: String] = [:]
+
     init(configDir: String? = nil) {
         if let dir = configDir {
             self.configDir = dir
@@ -282,6 +285,9 @@ final class ClaudeProvider: SessionProvider {
                 pendingDetail = subagentPendingDetail
             }
 
+            // Detect terminal app from process tree
+            let termBundleId = sessionPidMap[sessionId].flatMap { detectTerminalBundleId(for: $0) }
+
             results.append(AgentSession(
                 id: sessionId,
                 source: source,
@@ -294,12 +300,55 @@ final class ClaudeProvider: SessionProvider {
                 lastAssistantMessage: lastAssistantMessage,
                 currentTool: currentTool,
                 toolDescription: nil,
+                terminalBundleId: termBundleId,
                 pendingApprovalTool: pendingTool,
                 pendingApprovalDetail: pendingDetail
             ))
         }
 
         return results
+    }
+
+    // MARK: - Terminal Detection
+
+    /// Detect the terminal app by walking the process tree from a Claude PID.
+    /// Caches the result per PID.
+    private func detectTerminalBundleId(for pid: pid_t) -> String? {
+        if let cached = pidTerminalCache[pid] { return cached }
+
+        var p = pid
+        for _ in 0..<6 {
+            let pipe = Pipe()
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/ps")
+            proc.arguments = ["-o", "ppid=,comm=", "-p", "\(p)"]
+            proc.standardOutput = pipe
+            proc.standardError = FileHandle.nullDevice
+            do { try proc.run() } catch { break }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !output.isEmpty else { break }
+
+            let parts = output.split(separator: " ", maxSplits: 1)
+            guard let ppid = parts.first.flatMap({ pid_t($0) }) else { break }
+            let comm = parts.count > 1 ? String(parts[1]) : ""
+
+            // Check if parent path contains a .app bundle
+            if comm.contains(".app/") {
+                // Extract /path/to/Foo.app
+                if let range = comm.range(of: ".app/") ?? comm.range(of: ".app") {
+                    let appPath = String(comm[comm.startIndex...range.lowerBound]) + "app"
+                    if let bundle = Bundle(path: appPath), let bid = bundle.bundleIdentifier {
+                        pidTerminalCache[pid] = bid
+                        return bid
+                    }
+                }
+            }
+            p = ppid
+            if ppid <= 1 { break }
+        }
+        return nil
     }
 
     // MARK: - Subagent Approval Detection
@@ -550,8 +599,12 @@ final class ClaudeProvider: SessionProvider {
     /// Two-step approach:
     /// 1. Primary: Read ~/.claude/sessions/{pid}.json for all live PIDs
     /// 2. Fallback: Scan process table for "claude" processes, match CWD to project dirs
+    /// Maps sessionId → PID for terminal detection
+    private var sessionPidMap: [String: pid_t] = [:]
+
     private func discoverRunningSessions(fm: FileManager) -> Set<String> {
         var sessionIds = Set<String>()
+        sessionPidMap.removeAll()
 
         // Primary: PID files → authoritative session mapping
         let sessionsDir = configDir + "/sessions"
@@ -577,6 +630,7 @@ final class ClaudeProvider: SessionProvider {
 
                 log.debug("PID \(pid) alive → session \(sessionId)")
                 sessionIds.insert(sessionId)
+                sessionPidMap[sessionId] = pid
             }
         }
 

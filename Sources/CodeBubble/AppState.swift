@@ -608,6 +608,9 @@ final class AppState {
             sessions[session.id]?.model = session.model
             sessions[session.id]?.gitBranch = session.gitBranch
             sessions[session.id]?.source = session.source
+            if let termBid = session.terminalBundleId {
+                sessions[session.id]?.terminalBundleId = termBid
+            }
 
             if let prompt = session.lastUserPrompt {
                 sessions[session.id]?.lastUserPrompt = prompt
