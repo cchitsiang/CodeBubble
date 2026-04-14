@@ -502,6 +502,7 @@ final class AppState {
             // If hook has a pending approval for this session, it's authoritative —
             // don't let provider polling overwrite the waiting state or pending tool info.
             let hasHookApproval = hookApprovalQueue.contains { $0.sessionId == session.id }
+            let hasHookQuestion = hookQuestionQueue.contains { $0.sessionId == session.id }
 
             // After hook approve/deny, suppress JSONL re-detection for 10s while
             // Claude runs the tool and writes tool_result (CodeIsland approach:
@@ -518,7 +519,7 @@ final class AppState {
                 recentlyResolved = false
             }
 
-            if hasHookApproval {
+            if hasHookApproval || hasHookQuestion {
                 sessions[session.id]?.status = .waitingForUser
             } else if recentlyResolved && status == .waitingForUser {
                 // Suppress: JSONL still shows old tool_use but we already resolved it
