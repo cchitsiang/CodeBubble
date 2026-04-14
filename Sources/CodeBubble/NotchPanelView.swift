@@ -251,14 +251,16 @@ struct NotchPanelView: View {
                             // Guard: mouse may have left during the delay
                             guard isHovered else { return }
                             withAnimation(NotchAnimation.open) {
-                                // On hover, only auto-surface hook-based (interactive) items.
-                                // JSONL-detected approvals are surfaced by tapping the session card.
+                                // Prefer hook-based items, then JSONL-detected pending approvals
                                 if let q = appState.pendingHookQuestion {
                                     appState.surface = .questionCard(sessionId: q.sessionId)
                                     appState.activeSessionId = q.sessionId
                                 } else if let a = appState.pendingHookApproval {
                                     appState.surface = .approvalCard(sessionId: a.sessionId)
                                     appState.activeSessionId = a.sessionId
+                                } else if let pendingId = appState.pendingApprovalSessionId {
+                                    appState.surface = .approvalCard(sessionId: pendingId)
+                                    appState.activeSessionId = pendingId
                                 } else {
                                     appState.surface = .sessionList
                                     appState.cancelCompletionQueue()

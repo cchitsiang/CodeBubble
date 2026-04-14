@@ -660,8 +660,10 @@ final class AppState {
         if let head = hookApprovalQueue.first {
             return head.sessionId
         }
+        // JSONL-detected: skip sessions recently resolved (avoids re-surfacing after Allow/Deny)
         return sessions
             .filter { $0.value.status == .waitingForUser && $0.value.pendingApprovalTool != nil }
+            .filter { recentlyResolvedApprovals[$0.key] == nil }
             .max { a, b in a.value.lastActivity < b.value.lastActivity }?
             .key
     }

@@ -169,6 +169,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     } else if let a = appState.pendingHookApproval {
                         appState.surface = .approvalCard(sessionId: a.sessionId)
                         appState.activeSessionId = a.sessionId
+                    } else if let pendingId = appState.pendingApprovalSessionId {
+                        appState.surface = .approvalCard(sessionId: pendingId)
+                        appState.activeSessionId = pendingId
                     } else {
                         appState.surface = .sessionList
                         appState.cancelCompletionQueue()
