@@ -11,9 +11,13 @@ private let log = Logger(subsystem: "com.codebubble", category: "HookSocketServe
 final class HookSocketServer {
     private let appState: AppState
     private var listener: NWListener?
+    private let permissionChecker: ClaudePermissionChecker
 
     init(appState: AppState) {
         self.appState = appState
+        let home = NSHomeDirectory()
+        let configDir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"] ?? "\(home)/.claude"
+        self.permissionChecker = ClaudePermissionChecker.load(from: configDir)
     }
 
     func start() {
@@ -117,6 +121,13 @@ final class HookSocketServer {
         let sessionId = (json["session_id"] as? String) ?? (json["sessionId"] as? String) ?? "default"
         let toolName = (json["tool_name"] as? String) ?? (json["toolName"] as? String) ?? "Tool"
         let toolInput = (json["tool_input"] as? [String: Any]) ?? [:]
+
+        // Auto-approve safe tools without showing UI (same as upstream)
+        if permissionChecker.isAutoApproved(tool: toolName, input: toolInput) {
+            let response = #"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#
+            send(connection: connection, data: Data(response.utf8))
+            return
+        }
 
         // Monitor for bridge process disconnect — if the bridge dies (e.g., Claude killed it),
         // clean up the orphaned queue entry so the ApprovalBar/QuestionBar dismisses.
