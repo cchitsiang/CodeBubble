@@ -13,6 +13,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var globalShortcutMonitor: Any?
     private var localShortcutMonitor: Any?
     private var wasAccessibilityGranted = false
+    private var accessibilityTimer: Timer?
     let appState = AppState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -72,6 +73,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         SoundManager.shared.playBoot()
         promptAccessibilityIfNeeded()
         setupGlobalShortcut()
+
+        // Poll for Accessibility permission every 5s until granted,
+        // then re-register shortcuts and stop polling.
+        if !wasAccessibilityGranted {
+            accessibilityTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+                Task { @MainActor in
+                    self?.reCheckAccessibility()
+                }
+            }
+        }
 
         // Boot animation: brief expand to confirm app is running
         Task { @MainActor in
@@ -137,10 +148,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Called on app activation — if the user just granted Accessibility, re-register shortcuts.
     private func reCheckAccessibility() {
-        guard !wasAccessibilityGranted else { return }
+        guard !wasAccessibilityGranted else {
+            accessibilityTimer?.invalidate()
+            accessibilityTimer = nil
+            return
+        }
         if AXIsProcessTrusted() {
             wasAccessibilityGranted = true
-            Self.log.info("Accessibility granted — re-registering global shortcuts")
+            accessibilityTimer?.invalidate()
+            accessibilityTimer = nil
             setupGlobalShortcut()
         }
     }
