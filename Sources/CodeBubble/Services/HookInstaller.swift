@@ -119,20 +119,30 @@ enum HookInstaller {
         ]
 
         var hooks = json["hooks"] as? [String: Any] ?? [:]
-        var permissionReqs = hooks["PermissionRequest"] as? [[String: Any]] ?? []
 
-        // Remove any existing codebubble entries (bridge + legacy hook.sh) so we stay idempotent
-        permissionReqs.removeAll { entry in
-            if let entryHooks = entry["hooks"] as? [[String: Any]] {
-                return entryHooks.contains { hook in
-                    let cmd = hook["command"] as? String ?? ""
-                    return cmd.contains("codebubble")
+        // Remove ALL legacy codebubble hook entries from every event
+        // (old architecture registered hooks for 12+ events)
+        for event in Array(hooks.keys) {
+            guard var entries = hooks[event] as? [[String: Any]] else { continue }
+            entries.removeAll { entry in
+                if let entryHooks = entry["hooks"] as? [[String: Any]] {
+                    return entryHooks.contains { hook in
+                        let cmd = hook["command"] as? String ?? ""
+                        return cmd.contains("codebubble")
+                    }
                 }
+                return false
             }
-            return false
+            if entries.isEmpty {
+                hooks.removeValue(forKey: event)
+            } else {
+                hooks[event] = entries
+            }
         }
-        permissionReqs.append(permissionEntry)
 
+        // Register our single PermissionRequest hook
+        var permissionReqs = hooks["PermissionRequest"] as? [[String: Any]] ?? []
+        permissionReqs.append(permissionEntry)
         hooks["PermissionRequest"] = permissionReqs
         json["hooks"] = hooks
 
