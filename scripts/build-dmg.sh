@@ -63,34 +63,47 @@ xcrun actool \
 # Copy AppIcon.icns (actool with .icon bundle may not produce .icns)
 cp "$REPO_ROOT/Sources/CodeBubble/Resources/AppIcon.icns" "$CONTENTS_DIR/Resources/AppIcon.icns"
 
-# Copy SPM resource bundles at .app root where Bundle.module expects them
+# Copy SPM resource bundles into Contents/Resources/ (required for code signing)
 for bundle in "$BUILD_DIR"/*/release/*.bundle; do
     if [ -e "$bundle" ]; then
-        cp -R "$bundle" "$APP_DIR/"
+        cp -R "$bundle" "$CONTENTS_DIR/Resources/"
         break
     fi
 done
 
 echo "==> App bundle assembled at $APP_DIR"
 
-# ---------------------------------------------------------------------------
-# Code signing requires an Apple Developer account ($99/year).
-# Without Developer ID signing + notarization, macOS Gatekeeper will block
-# apps downloaded from the internet ("damaged" / "unidentified developer").
-#
-# Workaround for users: run  xattr -cr /Applications/CodeBubble.app
-# Or install via Homebrew:  brew install --cask cchitsiang/tap/codebubble
-#
-# To enable signing, uncomment below and set your credentials:
-# ---------------------------------------------------------------------------
-# TEAM_ID="YOUR_TEAM_ID"
-# SIGNING_IDENTITY="Developer ID Application: Your Name (${TEAM_ID})"
-#
-# codesign --deep --force --options runtime \
-#     --entitlements "$REPO_ROOT/CodeBubble.entitlements" \
-#     --sign "$SIGNING_IDENTITY" \
-#     "$APP_DIR"
-# ---------------------------------------------------------------------------
+# Ad-hoc sign with stable identifier so Accessibility persists across installs.
+# For distribution, set SIGN_ID to a Developer ID certificate.
+SIGN_ID="${SIGN_ID:-}"
+if [ -z "$SIGN_ID" ]; then
+    SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+fi
+if [ -z "$SIGN_ID" ]; then
+    SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep -v "REVOKED" | head -1 | sed 's/.*"\(.*\)".*/\1/' || true)
+fi
+
+if [ -n "$SIGN_ID" ]; then
+    echo "==> Code signing ($SIGN_ID)"
+    codesign --force --options runtime \
+        --sign "$SIGN_ID" \
+        --identifier "com.codebubble.bridge" \
+        "$CONTENTS_DIR/Helpers/codebubble-bridge"
+    codesign --force --options runtime \
+        --sign "$SIGN_ID" \
+        --identifier "com.codebubble.app" \
+        --entitlements "$REPO_ROOT/CodeBubble.entitlements" \
+        "$APP_DIR"
+else
+    echo "==> Ad-hoc signing (no certificate found)"
+    codesign --force --sign - \
+        --identifier "com.codebubble.bridge" \
+        "$CONTENTS_DIR/Helpers/codebubble-bridge"
+    codesign --force --sign - \
+        --identifier "com.codebubble.app" \
+        --entitlements "$REPO_ROOT/CodeBubble.entitlements" \
+        "$APP_DIR"
+fi
 
 echo "==> Creating DMG"
 
