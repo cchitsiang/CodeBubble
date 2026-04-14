@@ -960,22 +960,9 @@ private struct SessionCard: View {
 
                     HStack(spacing: 4) {
                         SessionTag(timeAgo(session.startTime))
-                        TerminalBadge(session: session)
-                        Button {
+                        TerminalBadge(session: session, onTap: {
                             TerminalActivator.activate(session: session, sessionId: sessionId)
-                        } label: {
-                            Image(systemName: "terminal.fill")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.white.opacity(0.55))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(Color.white.opacity(0.08))
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .help("Jump to terminal")
+                        })
                     }
                 }
 
@@ -1227,6 +1214,7 @@ private struct NotchPanelShape: Shape {
 /// Source badge (display only, not a button)
 private struct TerminalBadge: View {
     let session: SessionSnapshot
+    var onTap: (() -> Void)? = nil
 
     private static let sourceBundleIds: [String: String] = [
         "cursor": "com.todesktop.230313mzl4w4u92",
@@ -1246,16 +1234,23 @@ private struct TerminalBadge: View {
     }
 
     var body: some View {
-        HStack(spacing: 3) {
+        Group {
             if let icon = termIcon {
                 Image(nsImage: icon)
                     .resizable()
-                    .frame(width: 13, height: 13)
+                    .frame(width: 14, height: 14)
+            } else {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.55))
             }
-            Text(session.source)
-                .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
         }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 4).fill(Color.white.opacity(0.08)))
+        .contentShape(Rectangle())
+        .onTapGesture { onTap?() }
+        .help("Jump to terminal")
     }
 }
 
