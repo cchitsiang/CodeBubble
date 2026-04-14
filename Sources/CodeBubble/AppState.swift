@@ -35,7 +35,7 @@ final class AppState {
     /// Track last observed activity per session to detect fast transitions missed by polling
     private var lastObservedActivity: [String: Date] = [:]
     /// Sessions that already showed a completion card since their last non-idle state
-    private var completionShownSessions: Set<String> = [:]
+    private var completionShownSessions = Set<String>()
     /// Sessions recently resolved via hook (approve/deny) — suppress JSONL-based approval for 10s
     private var recentlyResolvedApprovals: [String: Date] = [:]
     /// Mouse must enter the panel before auto-collapse is allowed (prevents instant dismiss)
