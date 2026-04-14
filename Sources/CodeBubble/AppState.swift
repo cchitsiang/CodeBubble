@@ -280,6 +280,16 @@ final class AppState {
         toolInput: [String: Any],
         continuation: CheckedContinuation<Data, Never>
     ) {
+        // Drain stale approvals for this session — if Claude fires a new hook,
+        // any previous pending hooks for the same session are obsolete (Claude
+        // already moved past them, possibly via terminal approval or timeout).
+        let allowData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}"#.utf8)
+        hookApprovalQueue.removeAll { item in
+            guard item.sessionId == sessionId else { return false }
+            item.continuation.resume(returning: allowData)
+            return true
+        }
+
         let approval = HookApproval(
             sessionId: sessionId,
             toolName: toolName,
@@ -449,6 +459,14 @@ final class AppState {
         items: [QuestionItem],
         continuation: CheckedContinuation<Data, Never>
     ) {
+        // Drain stale questions for this session
+        let denyData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
+        hookQuestionQueue.removeAll { item in
+            guard item.sessionId == sessionId else { return false }
+            item.continuation.resume(returning: denyData)
+            return true
+        }
+
         let q = HookQuestion(sessionId: sessionId, items: items, continuation: continuation)
         hookQuestionQueue.append(q)
 
