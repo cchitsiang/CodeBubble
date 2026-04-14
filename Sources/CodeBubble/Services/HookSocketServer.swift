@@ -118,6 +118,10 @@ final class HookSocketServer {
         let toolName = (json["tool_name"] as? String) ?? (json["toolName"] as? String) ?? "Tool"
         let toolInput = (json["tool_input"] as? [String: Any]) ?? [:]
 
+        // Monitor for bridge process disconnect — if the bridge dies (e.g., Claude killed it),
+        // clean up the orphaned queue entry so the ApprovalBar/QuestionBar dismisses.
+        monitorPeerDisconnect(connection: connection, sessionId: sessionId)
+
         // AskUserQuestion is a question, not a permission — route to QuestionBar
         if toolName == "AskUserQuestion" {
             var items: [QuestionItem] = []
@@ -177,7 +181,41 @@ final class HookSocketServer {
         }
     }
 
+    // MARK: - Peer disconnect monitoring (ported from CodeIsland)
+
+    /// Per-connection state — `responded` flips to true once we've sent the response,
+    /// so our own `connection.cancel()` inside `send` does not masquerade as a peer disconnect.
+    private final class ConnectionContext { var responded = false }
+    private var contexts: [ObjectIdentifier: ConnectionContext] = [:]
+
+    /// Watch for bridge process disconnect. Uses `stateUpdateHandler` transitioning to
+    /// `cancelled`/`failed` — NOT EOF on read side (bridge does `shutdown(SHUT_WR)` which
+    /// produces EOF on half-close, not a real disconnect).
+    private func monitorPeerDisconnect(connection: NWConnection, sessionId: String) {
+        let ctx = ConnectionContext()
+        contexts[ObjectIdentifier(connection)] = ctx
+
+        connection.stateUpdateHandler = { [weak self] state in
+            Task { @MainActor in
+                guard let self else { return }
+                switch state {
+                case .cancelled, .failed:
+                    if !ctx.responded {
+                        self.appState.handlePeerDisconnect(sessionId: sessionId)
+                    }
+                    self.contexts.removeValue(forKey: ObjectIdentifier(connection))
+                default:
+                    break
+                }
+            }
+        }
+    }
+
     private func send(connection: NWConnection, data: Data) {
+        // Mark as responded BEFORE cancel() so the disconnect monitor ignores our own teardown.
+        if let ctx = contexts[ObjectIdentifier(connection)] {
+            ctx.responded = true
+        }
         connection.send(content: data, completion: .contentProcessed { _ in
             connection.cancel()
         })

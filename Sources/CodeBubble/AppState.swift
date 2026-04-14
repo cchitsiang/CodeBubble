@@ -405,6 +405,39 @@ final class AppState {
         return nil
     }
 
+    // MARK: - Peer Disconnect (bridge died / Claude killed hook)
+
+    /// Called when the bridge socket disconnects before we sent a response.
+    /// The bridge exited (e.g., Claude timed it out or user Ctrl-C'd) — clean up
+    /// orphaned queue entries so the ApprovalBar/QuestionBar dismisses.
+    func handlePeerDisconnect(sessionId: String) {
+        // Drain approvals for this session
+        let denyData = Data(#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny"}}}"#.utf8)
+        hookApprovalQueue.removeAll { item in
+            guard item.sessionId == sessionId else { return false }
+            item.continuation.resume(returning: denyData)
+            return true
+        }
+        // Drain questions for this session
+        hookQuestionQueue.removeAll { item in
+            guard item.sessionId == sessionId else { return false }
+            item.continuation.resume(returning: denyData)
+            return true
+        }
+
+        sessions[sessionId]?.pendingApprovalTool = nil
+        sessions[sessionId]?.pendingApprovalDetail = nil
+        recentlyResolvedApprovals[sessionId] = Date()
+
+        // Dismiss the card if it was showing for this session
+        if case .approvalCard(let sid) = surface, sid == sessionId {
+            showNextApprovalOrCollapse()
+        } else if case .questionCard(let sid) = surface, sid == sessionId {
+            showNextApprovalOrCollapse()
+        }
+        refreshDerivedState()
+    }
+
     // MARK: - Hook-Based Questions (AskUserQuestion)
 
     /// First pending question (if any).
