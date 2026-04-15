@@ -218,6 +218,7 @@ final class ClaudeProvider: SessionProvider {
             )
             let lastEntry = entries.last!
             let cwd = entries.last(where: { $0.cwd != nil })?.cwd
+                ?? readCwdFromHead(filePath: filePath, fm: fm)
             let gitBranch = entries.last(where: { $0.gitBranch != nil })?.gitBranch
             let model = entries.last(where: {
                 $0.type == "assistant" && $0.message?.model != nil
@@ -727,6 +728,22 @@ final class ClaudeProvider: SessionProvider {
     }
 
     // MARK: - File Reading
+
+    /// Read the CWD from the first few KB of a JSONL file.
+    /// Used as a fallback when the tail of a long session file no longer carries CWD.
+    private func readCwdFromHead(filePath: String, fm: FileManager) -> String? {
+        guard let handle = FileHandle(forReadingAtPath: filePath) else { return nil }
+        defer { handle.closeFile() }
+        handle.seek(toFileOffset: 0)
+        let data = handle.readData(ofLength: 8192)
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        for line in text.components(separatedBy: "\n") {
+            if let entry = ClaudeJSONLEntry.parse(line), let cwd = entry.cwd, !cwd.isEmpty {
+                return cwd
+            }
+        }
+        return nil
+    }
 
     /// Read the last ~`count` entries from a JSONL file.
     /// For large files (>10KB), seeks near the end to avoid reading the whole file.

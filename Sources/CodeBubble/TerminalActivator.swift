@@ -38,12 +38,47 @@ struct TerminalActivator {
             return
         }
 
-        // Use detected terminal bundle ID (from process tree), fallback to heuristic
-        let bundleId = session.terminalBundleId ?? detectRunningTerminalBundleId()
-        logger.info("[Activate] Resolved bundleId=\(bundleId ?? "nil", privacy: .public)")
+        let projectName = session.projectDisplayName
+        dbgLog("[Activate] cwd=\(session.cwd ?? "nil") projectName=\(projectName ?? "nil") terminalBundleId=\(session.terminalBundleId ?? "nil")")
+
+        // terminalBundleId=nil means the session is inside tmux — the Claude process's parent
+        // is the tmux server (a background daemon), so process-tree detection can't reach the
+        // terminal app. Only attempt tmux jump in this case.
+        let bundleId: String?
+        if session.terminalBundleId == nil {
+            // terminalBundleId=nil → session is inside tmux (Claude's parent is the tmux server).
+            // Find the pane, then check whether a Ghostty client is already attached.
+            // If yes → switch that client and raise Ghostty.
+            // If no  → open a new Ghostty window via attach-session.
+            if let pane = findTmuxPane(cwd: session.cwd, projectName: projectName) {
+                dbgLog("[Activate] tmux pane found: \(pane.sessionName) ghosttyClient=\(findGhosttyClient(socketPath: pane.socketPath) ?? "none")")
+                if let ghosttyTty = findGhosttyClient(socketPath: pane.socketPath) {
+                    // Switch the Ghostty client to the target pane
+                    let target = "\(pane.sessionId):\(pane.windowId).\(pane.paneId)"
+                    guard let tmux = findBinary("tmux") else { return }
+                    _ = runProcess(tmux, args: ["-S", pane.socketPath, "switch-client", "-c", ghosttyTty, "-t", target])
+                    _ = runProcess(tmux, args: ["-S", pane.socketPath, "select-window", "-t", "\(pane.sessionId):\(pane.windowId)"])
+                    _ = runProcess(tmux, args: ["-S", pane.socketPath, "select-pane", "-t", target])
+                    dbgLog("[Activate] switched Ghostty client \(ghosttyTty) to \(target)")
+                    activateGhostty(cwd: session.cwd, sessionId: nil, source: session.source)
+                } else {
+                    dbgLog("[Activate] no Ghostty client — openTmuxAttachInNewTab \(pane.sessionName)")
+                    openTmuxAttachInNewTab(socketPath: pane.socketPath, sessionName: pane.sessionName, bundleId: "com.mitchellh.ghostty")
+                }
+            } else {
+                dbgLog("[Activate] no tmux pane found — opening Ghostty")
+                activateByBundleId("com.mitchellh.ghostty")
+            }
+            return
+        } else {
+            bundleId = session.terminalBundleId
+        }
+
+        dbgLog("[Activate] terminal switch bundleId=\(bundleId ?? "nil")")
 
         switch bundleId {
         case "com.mitchellh.ghostty":
+            dbgLog("[Activate] → activateGhostty cwd=\(session.cwd ?? "nil")")
             activateGhostty(cwd: session.cwd, sessionId: sessionId, source: session.source)
         case "com.googlecode.iterm2":
             activateITermByCwd(cwd: session.cwd)
@@ -450,8 +485,7 @@ struct TerminalActivator {
         }) {
             if app.isHidden { app.unhide() }
             app.activate()
-        }
-        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+        } else if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
         }
     }
@@ -483,6 +517,256 @@ struct TerminalActivator {
             proc.arguments = ["-a", name]
             try? proc.run()
         }
+    }
+
+    // MARK: - tmux
+
+    private struct TmuxPane {
+        let paneId: String
+        let cwd: String
+        let sessionId: String
+        let windowId: String
+        let sessionName: String
+        let socketPath: String
+    }
+
+    private struct TmuxClient {
+        let clientTty: String
+        let sessionId: String
+    }
+
+    /// Find all panes across all tmux sessions, using the default socket.
+    private static func listTmuxPanes() -> [TmuxPane]? {
+        guard let tmux = findBinary("tmux") else {
+            dbgLog("[listTmuxPanes] tmux binary not found")
+            return nil
+        }
+        let fmt = "#{pane_id}\t#{pane_current_path}\t#{session_id}\t#{window_id}\t#{session_name}\t#{socket_path}"
+        guard let data = runProcess(tmux, args: ["list-panes", "-a", "-F", fmt]),
+              let output = String(data: data, encoding: .utf8) else {
+            dbgLog("[listTmuxPanes] runProcess failed (tmux not running or error)")
+            return nil
+        }
+        let panes = output.split(separator: "\n").compactMap { line -> TmuxPane? in
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard parts.count >= 6 else { return nil }
+            return TmuxPane(
+                paneId: String(parts[0]),
+                cwd: String(parts[1]),
+                sessionId: String(parts[2]),
+                windowId: String(parts[3]),
+                sessionName: String(parts[4]),
+                socketPath: String(parts[5])
+            )
+        }
+        dbgLog("[listTmuxPanes] found \(panes.count) panes: \(panes.map { "\($0.sessionName):\($0.cwd)" }.joined(separator: ", "))")
+        return panes
+    }
+
+    /// List attached clients for a tmux server identified by its socket path.
+    private static func listTmuxClients(socketPath: String) -> [TmuxClient]? {
+        guard let tmux = findBinary("tmux") else { return nil }
+        let fmt = "#{client_tty}\t#{client_session}"
+        guard let data = runProcess(tmux, args: ["-S", socketPath, "list-clients", "-F", fmt]),
+              let output = String(data: data, encoding: .utf8) else { return nil }
+        return output.split(separator: "\n").compactMap { line in
+            let parts = line.split(separator: "\t", omittingEmptySubsequences: false)
+            guard parts.count >= 2 else { return nil }
+            return TmuxClient(clientTty: String(parts[0]), sessionId: String(parts[1]))
+        }
+    }
+
+    /// Switch the tmux client to the pane whose CWD (or session name) matches. Returns true on success.
+    @discardableResult
+    private static func tmuxJump(cwd: String?, projectName: String? = nil) -> Bool {
+        guard let tmux = findBinary("tmux") else { return false }
+        guard let panes = listTmuxPanes(), !panes.isEmpty else { return false }
+
+        var pane: TmuxPane?
+
+        // Session name match has highest priority — most precise when multiple panes share a CWD
+        if let projectName, !projectName.isEmpty {
+            pane = panes.first(where: { $0.sessionName == projectName })
+        }
+
+        if pane == nil, let cwd, !cwd.isEmpty {
+            let resolvedCwd = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
+
+            // Exact CWD match
+            pane = panes.first(where: { $0.cwd == cwd || $0.cwd == resolvedCwd })
+
+            // Ancestor match: pane sits at a parent of the session CWD
+            if pane == nil {
+                let candidates = panes.filter { p in
+                    cwd.hasPrefix(p.cwd + "/") || resolvedCwd.hasPrefix(p.cwd + "/")
+                }
+                pane = candidates.max(by: { $0.cwd.count < $1.cwd.count })
+            }
+        }
+
+        guard let pane else {
+            dbgLog("[tmuxJump] No pane found cwd=\(cwd ?? "nil") projectName=\(projectName ?? "nil")")
+            return false
+        }
+
+        let target = "\(pane.sessionId):\(pane.windowId).\(pane.paneId)"
+        dbgLog("[tmuxJump] Found pane=\(target) socket=\(pane.socketPath) sessionName=\(pane.sessionName)")
+
+        let clients = listTmuxClients(socketPath: pane.socketPath) ?? []
+        // Prefer a client already attached to the same session, then any client
+        let client = clients.first(where: { $0.sessionId == pane.sessionId }) ?? clients.first
+
+        // switch-client moves the client's focus to our target pane
+        var switchArgs = ["-S", pane.socketPath, "switch-client"]
+        if let tty = client?.clientTty {
+            logger.info("[tmuxJump] Using client_tty=\(tty, privacy: .public)")
+            switchArgs += ["-c", tty]
+        }
+        switchArgs += ["-t", target]
+        _ = runProcess(tmux, args: switchArgs)
+
+        // select-window + select-pane ensure the pane is visible even if switch-client
+        // targeted a different session (or no client was found)
+        _ = runProcess(tmux, args: ["-S", pane.socketPath, "select-window", "-t", "\(pane.sessionId):\(pane.windowId)"])
+        _ = runProcess(tmux, args: ["-S", pane.socketPath, "select-pane", "-t", target])
+
+        logger.info("[tmuxJump] Done — switched to \(target, privacy: .public)")
+        return true
+    }
+
+    /// Walk up the process tree from `pid` looking for a known terminal app bundle.
+    private static func walkPidTreeForTerminal(_ startPid: pid_t) -> String? {
+        var p = startPid
+        for _ in 0..<12 {
+            guard let data = runProcess("/bin/ps", args: ["-o", "ppid=,comm=", "-p", "\(p)"]),
+                  let out = String(data: data, encoding: .utf8)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !out.isEmpty else { break }
+            let parts = out.split(separator: " ", maxSplits: 1)
+            guard let ppid = parts.first.flatMap({ pid_t($0) }) else { break }
+            let comm = parts.count > 1 ? String(parts[1]) : ""
+            // Match .app bundle path
+            if comm.contains(".app/") || comm.hasSuffix(".app") {
+                let endIdx = (comm.range(of: ".app/")?.lowerBound
+                    ?? comm.range(of: ".app")?.lowerBound) ?? comm.endIndex
+                let appPath = String(comm[..<endIdx]) + ".app"
+                if let bundle = Bundle(path: appPath), let bid = bundle.bundleIdentifier {
+                    return bid
+                }
+            }
+            // Match known terminal process names
+            let lower = comm.lowercased()
+            for (name, bundleId) in knownTerminals {
+                if lower.contains(name.lowercased()) { return bundleId }
+            }
+            p = ppid
+            if ppid <= 1 { break }
+        }
+        return nil
+    }
+
+    /// Find the best matching tmux pane for a session (session name > exact CWD > ancestor CWD).
+    private static func findTmuxPane(cwd: String?, projectName: String?) -> TmuxPane? {
+        guard let panes = listTmuxPanes(), !panes.isEmpty else { return nil }
+        // 1. Session name (most precise — avoids CWD collisions)
+        if let name = projectName, !name.isEmpty,
+           let pane = panes.first(where: { $0.sessionName == name }) { return pane }
+        guard let cwd, !cwd.isEmpty else { return nil }
+        let resolved = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
+        // 2. Exact CWD
+        if let pane = panes.first(where: { $0.cwd == cwd || $0.cwd == resolved }) { return pane }
+        // 3. Ancestor CWD (pane sits at a parent directory of the session CWD)
+        return panes
+            .filter { cwd.hasPrefix($0.cwd + "/") || resolved.hasPrefix($0.cwd + "/") }
+            .max(by: { $0.cwd.count < $1.cwd.count })
+    }
+
+    /// Find a tmux session by exact name match. Returns the first pane in that session.
+    private static func findTmuxSessionByName(_ name: String) -> TmuxPane? {
+        guard let panes = listTmuxPanes() else { return nil }
+        return panes.first(where: { $0.sessionName == name })
+    }
+
+    /// Return the TTY of the first tmux client that is running inside Ghostty.
+    private static func findGhosttyClient(socketPath: String) -> String? {
+        let clients = listTmuxClients(socketPath: socketPath) ?? []
+        for client in clients {
+            let ttyShort = client.clientTty.replacingOccurrences(of: "/dev/", with: "")
+            guard let data = runProcess("/bin/ps", args: ["-t", ttyShort, "-o", "pid="]),
+                  let out = String(data: data, encoding: .utf8) else { continue }
+            for pidLine in out.split(separator: "\n") {
+                guard let pid = pid_t(pidLine.trimmingCharacters(in: .whitespaces)) else { continue }
+                if let bid = walkPidTreeForTerminal(pid), bid == "com.mitchellh.ghostty" {
+                    return client.clientTty
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Open a new terminal tab/window and run `tmux attach-session` inside it.
+    private static func openTmuxAttachInNewTab(socketPath: String, sessionName: String, bundleId: String?) {
+        guard let tmux = findBinary("tmux") else { return }
+        logger.info("[tmuxAttach] Opening new tab: \(tmux, privacy: .public) -S \(socketPath, privacy: .public) attach-session -t \(sessionName, privacy: .public)")
+
+        switch bundleId {
+        case "com.googlecode.iterm2":
+            let attachCmd = escapeAppleScript("\(tmux) -S \(socketPath) attach-session -t \(sessionName)")
+            let script = """
+            tell application "iTerm2"
+                tell current window
+                    create tab with default profile
+                    tell current session
+                        write text "\(attachCmd)"
+                    end tell
+                end tell
+            end tell
+            """
+            runAppleScript(script)
+
+        case "com.apple.Terminal":
+            let attachCmd = escapeAppleScript("\(tmux) -S \(socketPath) attach-session -t \(sessionName)")
+            let script = """
+            tell application "Terminal"
+                do script "\(attachCmd)"
+                activate
+            end tell
+            """
+            runAppleScript(script)
+
+        default:
+            // Ghostty (and unknown terminals): open a new window running the attach command.
+            // Each argument must be passed separately — Ghostty's -e flag does not accept
+            // a single shell string; it takes the executable followed by its arguments.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+                proc.arguments = ["-na", "Ghostty.app", "--args",
+                                   "-e", tmux, "-S", socketPath, "attach-session", "-t", sessionName]
+                proc.standardOutput = FileHandle.nullDevice
+                proc.standardError = FileHandle.nullDevice
+                try? proc.run()
+            }
+        }
+    }
+
+    // MARK: - Debug trace
+
+    private static let dbgLogPath = "/tmp/cb-trace.log"
+
+    private static func dbgLog(_ msg: String) {
+        #if DEBUG
+        let line = "[\(Date())] \(msg)\n"
+        if let data = line.data(using: .utf8) {
+            if let fh = FileHandle(forWritingAtPath: dbgLogPath) {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                fh.closeFile()
+            } else {
+                FileManager.default.createFile(atPath: dbgLogPath, contents: data)
+            }
+        }
+        #endif
     }
 
     // MARK: - Helpers
