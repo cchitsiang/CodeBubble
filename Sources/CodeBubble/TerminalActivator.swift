@@ -296,9 +296,7 @@ struct TerminalActivator {
 
     /// Look up the pane UUID for a CWD in Warp's terminal_panes table.
     private static func warpLookupPaneUUID(forCwd cwd: String) -> String? {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
-              let db else { return nil }
+        guard let db = warpOpenDB() else { return nil }
         defer { sqlite3_close(db) }
 
         // Try both firmlink forms: /private/tmp/foo and /tmp/foo
@@ -306,7 +304,7 @@ struct TerminalActivator {
         let cwds = Array(Set([cwd, resolved]))
 
         for c in cwds {
-            let sql = "SELECT hex(pane_id) FROM terminal_panes WHERE cwd = ? ORDER BY id DESC LIMIT 1"
+            let sql = "SELECT hex(uuid) FROM terminal_panes WHERE cwd = ? ORDER BY id DESC LIMIT 1"
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
             defer { sqlite3_finalize(stmt) }
@@ -319,14 +317,17 @@ struct TerminalActivator {
         return nil
     }
 
-    /// Read the currently focused pane UUID from Warp's windows table.
+    /// Read the currently focused pane UUID (pane_leaves.is_focused = 1).
     private static func warpCurrentFocusedPaneUUID() -> String? {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
-              let db else { return nil }
+        guard let db = warpOpenDB() else { return nil }
         defer { sqlite3_close(db) }
 
-        let sql = "SELECT hex(focused_pane_id) FROM windows ORDER BY id DESC LIMIT 1"
+        let sql = """
+        SELECT hex(tp.uuid) FROM terminal_panes tp
+        JOIN pane_leaves pl ON pl.pane_node_id = tp.id
+        WHERE pl.is_focused = 1
+        LIMIT 1
+        """
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }
@@ -336,14 +337,12 @@ struct TerminalActivator {
         return nil
     }
 
-    /// Read the tab count from Warp's windows table.
+    /// Count tabs in the frontmost window.
     private static func warpTabCount() -> Int {
-        var db: OpaquePointer?
-        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
-              let db else { return 1 }
+        guard let db = warpOpenDB() else { return 1 }
         defer { sqlite3_close(db) }
 
-        let sql = "SELECT tab_count FROM windows ORDER BY id DESC LIMIT 1"
+        let sql = "SELECT COUNT(*) FROM tabs WHERE window_id = (SELECT id FROM windows ORDER BY id DESC LIMIT 1)"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 1 }
         defer { sqlite3_finalize(stmt) }
@@ -351,6 +350,12 @@ struct TerminalActivator {
             return Int(sqlite3_column_int(stmt, 0))
         }
         return 1
+    }
+
+    private static func warpOpenDB() -> OpaquePointer? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else { return nil }
+        return db
     }
 
     /// Click "Tab → Switch to Next Tab" menu item via Accessibility API.
