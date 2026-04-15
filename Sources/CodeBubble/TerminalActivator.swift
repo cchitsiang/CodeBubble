@@ -255,41 +255,109 @@ struct TerminalActivator {
         }
     }
 
-    // MARK: - Warp
+    // MARK: - Warp (SQLite-based pane resolution)
+
+    /// Warp's SQLite DB path (sandboxed Group Container).
+    private static var warpDBPath: String {
+        NSHomeDirectory()
+            + "/Library/Group Containers/2BBY89MBSN.dev.warp"
+            + "/Library/Application Support/dev.warp.Warp-Stable/warp.sqlite"
+    }
 
     private static func activateWarpByCwd(cwd: String?) {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == "dev.warp.Warp-Stable"
-        }) else {
-            bringToFront("Warp")
-            return
-        }
-        if app.isHidden { app.unhide() }
-        app.activate()
+        // Always activate Warp first
+        activateByBundleId("dev.warp.Warp-Stable")
         guard let cwd = cwd, !cwd.isEmpty else { return }
 
-        // Warp doesn't expose AppleScript/CLI for tab selection.
-        // Best effort: use its "Go to Tab" by CWD heuristic via AppleScript
-        // to cycle tabs and check window title.
-        let dirName = escapeAppleScript((cwd as NSString).lastPathComponent)
+        DispatchQueue.global(qos: .userInitiated).async {
+            // Resolve target pane UUID from Warp's SQLite
+            guard let targetUUID = warpLookupPaneUUID(forCwd: cwd) else { return }
+
+            // Wait for Warp to become frontmost
+            let start = Date()
+            while Date().timeIntervalSince(start) < 1.5 {
+                if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "dev.warp.Warp-Stable" { break }
+                Thread.sleep(forTimeInterval: 0.025)
+            }
+
+            // Check if already on the right pane
+            if warpCurrentFocusedPaneUUID() == targetUUID { return }
+
+            // Read tab count and cycle tabs
+            let tabCount = max(1, warpTabCount())
+            for _ in 0..<(tabCount + 2) {
+                warpNextTab()
+                Thread.sleep(forTimeInterval: 0.1)
+                if warpCurrentFocusedPaneUUID() == targetUUID { return }
+            }
+        }
+    }
+
+    /// Look up the pane UUID for a CWD in Warp's terminal_panes table.
+    private static func warpLookupPaneUUID(forCwd cwd: String) -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
+              let db else { return nil }
+        defer { sqlite3_close(db) }
+
+        // Try both firmlink forms: /private/tmp/foo and /tmp/foo
+        let resolved = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
+        let cwds = Array(Set([cwd, resolved]))
+
+        for c in cwds {
+            let sql = "SELECT hex(pane_id) FROM terminal_panes WHERE cwd = ? ORDER BY id DESC LIMIT 1"
+            var stmt: OpaquePointer?
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+            defer { sqlite3_finalize(stmt) }
+            let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            sqlite3_bind_text(stmt, 1, c, -1, SQLITE_TRANSIENT)
+            if sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) {
+                return String(cString: text)
+            }
+        }
+        return nil
+    }
+
+    /// Read the currently focused pane UUID from Warp's windows table.
+    private static func warpCurrentFocusedPaneUUID() -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
+              let db else { return nil }
+        defer { sqlite3_close(db) }
+
+        let sql = "SELECT hex(focused_pane_id) FROM windows ORDER BY id DESC LIMIT 1"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) {
+            return String(cString: text)
+        }
+        return nil
+    }
+
+    /// Read the tab count from Warp's windows table.
+    private static func warpTabCount() -> Int {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK,
+              let db else { return 1 }
+        defer { sqlite3_close(db) }
+
+        let sql = "SELECT tab_count FROM windows ORDER BY id DESC LIMIT 1"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 1 }
+        defer { sqlite3_finalize(stmt) }
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            return Int(sqlite3_column_int(stmt, 0))
+        }
+        return 1
+    }
+
+    /// Click "Tab → Switch to Next Tab" menu item via Accessibility API.
+    private static func warpNextTab() {
         let script = """
         tell application "System Events"
             tell process "Warp"
-                set frontmost to true
-                -- Check if current window title contains the project dir
-                try
-                    set winTitle to name of front window
-                    if winTitle contains "\(dirName)" then return
-                end try
-                -- Cycle through tabs to find the right one
-                repeat 20 times
-                    keystroke "]" using {command down, shift down}
-                    delay 0.15
-                    try
-                        set winTitle to name of front window
-                        if winTitle contains "\(dirName)" then return
-                    end try
-                end repeat
+                click menu item "Switch to Next Tab" of menu "Tab" of menu bar 1
             end tell
         end tell
         """
