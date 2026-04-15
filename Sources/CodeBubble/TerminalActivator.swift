@@ -271,103 +271,81 @@ struct TerminalActivator {
         guard let cwd = cwd, !cwd.isEmpty else { return }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            // Resolve target pane UUID from Warp's SQLite
-            guard let targetUUID = warpLookupPaneUUID(forCwd: cwd) else { return }
+            // Resolve target tab index from Warp's SQLite
+            guard let targetIndex = warpTabIndex(forCwd: cwd) else { return }
+            let currentIndex = warpActiveTabIndex()
+            guard targetIndex != currentIndex else { return } // already there
 
             // Wait for Warp to become frontmost
             let start = Date()
-            while Date().timeIntervalSince(start) < 1.5 {
+            while Date().timeIntervalSince(start) < 1.0 {
                 if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "dev.warp.Warp-Stable" { break }
                 Thread.sleep(forTimeInterval: 0.025)
             }
 
-            // Check if already on the right pane
-            if warpCurrentFocusedPaneUUID() == targetUUID { return }
-
-            // Read tab count and cycle tabs
-            let tabCount = max(1, warpTabCount())
-            for _ in 0..<(tabCount + 2) {
-                warpNextTab()
-                Thread.sleep(forTimeInterval: 0.1)
-                if warpCurrentFocusedPaneUUID() == targetUUID { return }
+            // Directly jump to tab N+1 (Warp uses ⌘1-⌘9 for tabs 1-9)
+            let tabNumber = targetIndex + 1  // 1-based for keyboard shortcut
+            if tabNumber >= 1 && tabNumber <= 9 {
+                let script = """
+                tell application "System Events"
+                    tell process "Warp"
+                        keystroke "\(tabNumber)" using command down
+                    end tell
+                end tell
+                """
+                runAppleScript(script)
             }
         }
     }
 
-    /// Look up the pane UUID for a CWD in Warp's terminal_panes table.
-    private static func warpLookupPaneUUID(forCwd cwd: String) -> String? {
+    /// Find the 0-based tab index for a CWD in Warp's SQLite.
+    private static func warpTabIndex(forCwd cwd: String) -> Int? {
         guard let db = warpOpenDB() else { return nil }
         defer { sqlite3_close(db) }
 
-        // Try both firmlink forms: /private/tmp/foo and /tmp/foo
         let resolved = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
         let cwds = Array(Set([cwd, resolved]))
 
         for c in cwds {
-            let sql = "SELECT hex(uuid) FROM terminal_panes WHERE cwd = ? ORDER BY id DESC LIMIT 1"
+            let sql = """
+            SELECT t.id - (SELECT MIN(t2.id) FROM tabs t2 WHERE t2.window_id = t.window_id) as tab_index
+            FROM terminal_panes tp
+            JOIN pane_nodes pn ON pn.id = tp.id
+            JOIN tabs t ON t.id = pn.tab_id
+            WHERE tp.cwd = ?
+            ORDER BY tp.id DESC LIMIT 1
+            """
             var stmt: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
             defer { sqlite3_finalize(stmt) }
             let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
             sqlite3_bind_text(stmt, 1, c, -1, SQLITE_TRANSIENT)
-            if sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) {
-                return String(cString: text)
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return Int(sqlite3_column_int(stmt, 0))
             }
         }
         return nil
     }
 
-    /// Read the currently focused pane UUID (pane_leaves.is_focused = 1).
-    private static func warpCurrentFocusedPaneUUID() -> String? {
-        guard let db = warpOpenDB() else { return nil }
+    /// Read the current active tab index from Warp's windows table.
+    private static func warpActiveTabIndex() -> Int {
+        guard let db = warpOpenDB() else { return 0 }
         defer { sqlite3_close(db) }
 
-        let sql = """
-        SELECT hex(tp.uuid) FROM terminal_panes tp
-        JOIN pane_leaves pl ON pl.pane_node_id = tp.id
-        WHERE pl.is_focused = 1
-        LIMIT 1
-        """
+        let sql = "SELECT active_tab_index FROM windows ORDER BY id DESC LIMIT 1"
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
-        defer { sqlite3_finalize(stmt) }
-        if sqlite3_step(stmt) == SQLITE_ROW, let text = sqlite3_column_text(stmt, 0) {
-            return String(cString: text)
-        }
-        return nil
-    }
-
-    /// Count tabs in the frontmost window.
-    private static func warpTabCount() -> Int {
-        guard let db = warpOpenDB() else { return 1 }
-        defer { sqlite3_close(db) }
-
-        let sql = "SELECT COUNT(*) FROM tabs WHERE window_id = (SELECT id FROM windows ORDER BY id DESC LIMIT 1)"
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 1 }
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return 0 }
         defer { sqlite3_finalize(stmt) }
         if sqlite3_step(stmt) == SQLITE_ROW {
             return Int(sqlite3_column_int(stmt, 0))
         }
-        return 1
+        return 0
     }
 
     private static func warpOpenDB() -> OpaquePointer? {
         var db: OpaquePointer?
         guard sqlite3_open_v2(warpDBPath, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else { return nil }
         return db
-    }
-
-    /// Click "Tab → Switch to Next Tab" menu item via Accessibility API.
-    private static func warpNextTab() {
-        let script = """
-        tell application "System Events"
-            tell process "Warp"
-                click menu item "Switch to Next Tab" of menu "Tab" of menu bar 1
-            end tell
-        end tell
-        """
-        runAppleScript(script)
     }
 
     // MARK: - VS Code / Cursor / Windsurf / Trae
