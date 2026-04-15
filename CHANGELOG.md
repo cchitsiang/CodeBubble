@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.2.4] — 2026-04-15
+
+### Added
+- **Warp tab jump via SQLite CWD-to-pane resolution**: reads Warp's internal SQLite DB to find the exact tab matching a session's CWD, then jumps directly to it with ⌘N keystroke
+- **Tab-level terminal jump**: uses the detected terminal bundle ID to route activation through terminal-specific jump strategies (Warp SQLite, iTerm2 AppleScript, etc.)
+- **Real terminal app icon detection**: resolves the actual terminal emulator from the process tree and displays its icon in session cards via TerminalBadge
+- **TerminalBadge shows terminal icon only**: removed the source label text, showing only the detected terminal's app icon for a cleaner look
+
+### Fixed
+- **Warp tab jump uses direct ⌘N keystroke** via `CGEventPostToPid` instead of cycling through tabs — reliable regardless of tab count or ordering
+- **Correct Warp SQLite column names** for tab jump queries (`terminal_panes`, `pane_nodes`, `tabs`, `windows`)
+- **Reduced text question delay** from 20s to 3s for faster question detection in the notch panel
+- **Subagent approval gating**: checks `permissionMode` in subagent JSONL before flagging tools as waiting for approval (prevents false positives for `bypassPermissions` subagents)
+
+## [1.2.3] — 2026-04-15
+
+### Fixed
+- `Set<String>()` initializer for `@Observable` compatibility (was causing compile error on older Xcode)
+- Completion card only fires once per idle period (prevents repeated completion toasts)
+
+## [1.2.2] — 2026-04-15
+
+### Added
+- **Accessibility change listener** via `DistributedNotificationCenter` — auto-detects when user grants Accessibility permission and re-registers global shortcuts without restart
+
+### Fixed
+- Accessibility prompt shown only once on first launch (no longer re-prompts every launch)
+- Accessibility banner uses 2s timer recheck for responsive UI updates
+- Silent Accessibility check — no system dialog on every app launch
+- Proper code signing in build-dmg.sh (Developer ID certs only, not Apple Development)
+- Stable code signing identifier for debug builds
+
+## [1.2.1] — 2026-04-15
+
+### Fixed
+- AppIcon.icns included in release DMG (was missing from `build-dmg.sh` copy step)
+
 ## [1.2.0] — 2026-04-15
 
 ### Added

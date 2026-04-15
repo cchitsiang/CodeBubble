@@ -1,6 +1,9 @@
 import AppKit
 import CodeBubbleCore
+import os.log
 import SQLite3
+
+private let logger = Logger(subsystem: "com.codebubble.app", category: "TerminalActivator")
 
 /// Activates the terminal window/tab associated with a session.
 /// Since we no longer have terminal metadata from hooks, this uses CWD-based
@@ -25,15 +28,19 @@ struct TerminalActivator {
     ]
 
     static func activate(session: SessionSnapshot, sessionId: String? = nil) {
+        logger.info("[Activate] source=\(session.source, privacy: .public), cwd=\(session.cwd ?? "nil", privacy: .public), terminalBundleId=\(session.terminalBundleId ?? "nil", privacy: .public)")
+
         // Native app: bring the source's desktop app to front if running
         if let nativeBundleId = sourceToNativeAppBundleId[session.source],
            NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == nativeBundleId }) {
+            logger.info("[Activate] Using native app: \(nativeBundleId, privacy: .public)")
             activateByBundleId(nativeBundleId)
             return
         }
 
         // Use detected terminal bundle ID (from process tree), fallback to heuristic
         let bundleId = session.terminalBundleId ?? detectRunningTerminalBundleId()
+        logger.info("[Activate] Resolved bundleId=\(bundleId ?? "nil", privacy: .public)")
 
         switch bundleId {
         case "com.mitchellh.ghostty":
@@ -266,64 +273,133 @@ struct TerminalActivator {
     }
 
     private static func activateWarpByCwd(cwd: String?) {
-        // Always activate Warp first
-        activateByBundleId("dev.warp.Warp-Stable")
-        guard let cwd = cwd, !cwd.isEmpty else { return }
+        logger.info("[WarpJump] activateWarpByCwd called, cwd=\(cwd ?? "nil", privacy: .public)")
+
+        guard let cwd = cwd, !cwd.isEmpty else {
+            logger.warning("[WarpJump] No CWD — falling back to plain activate")
+            activateByBundleId("dev.warp.Warp-Stable")
+            return
+        }
+
+        // Resolve target tab index from SQLite synchronously (fast — local DB read)
+        logger.info("[WarpJump] Looking up tab index for cwd=\(cwd, privacy: .public)")
+        guard let targetIndex = warpTabIndex(forCwd: cwd) else {
+            logger.warning("[WarpJump] warpTabIndex returned nil — CWD not found in SQLite")
+            activateByBundleId("dev.warp.Warp-Stable")
+            return
+        }
+
+        let tabNumber = targetIndex + 1  // 1-based for ⌘1-⌘9
+        logger.info("[WarpJump] Found tab index=\(targetIndex), tabNumber=\(tabNumber)")
+
+        guard tabNumber >= 1 && tabNumber <= 9 else {
+            logger.warning("[WarpJump] tabNumber \(tabNumber) out of ⌘1-⌘9 range")
+            activateByBundleId("dev.warp.Warp-Stable")
+            return
+        }
+
+        let currentIndex = warpActiveTabIndex()
+        logger.info("[WarpJump] Current active tab index=\(currentIndex), target=\(targetIndex)")
+
+        if currentIndex == targetIndex {
+            logger.info("[WarpJump] Already on target tab — just activating")
+            activateByBundleId("dev.warp.Warp-Stable")
+            return
+        }
+
+        // Send ⌘+N directly to Warp's PID via CGEventPostToPid. This function
+        // is marked "obsoleted" in Swift headers but still exists in CoreGraphics.
+        // We call it via dlsym to bypass the compiler restriction. This delivers
+        // keystrokes directly to the target process regardless of focus state.
+        logger.info("[WarpJump] Will send ⌘\(tabNumber) via CGEventPostToPid")
+
+        let keyCodes: [Int: UInt16] = [
+            1: 18, 2: 19, 3: 20, 4: 21, 5: 23,
+            6: 22, 7: 26, 8: 28, 9: 25,
+        ]
+        guard let kc = keyCodes[tabNumber] else {
+            logger.error("[WarpJump] No key code for tab \(tabNumber)")
+            return
+        }
+
+        guard let warp = NSWorkspace.shared.runningApplications.first(where: {
+            $0.bundleIdentifier == "dev.warp.Warp-Stable"
+        }) else {
+            logger.error("[WarpJump] Warp not running")
+            return
+        }
+
+        let warpPid = warp.processIdentifier
+        if warp.isHidden { warp.unhide() }
+        warp.activate()
 
         DispatchQueue.global(qos: .userInitiated).async {
-            // Resolve target tab index from Warp's SQLite
-            guard let targetIndex = warpTabIndex(forCwd: cwd) else { return }
-            let currentIndex = warpActiveTabIndex()
-            guard targetIndex != currentIndex else { return } // already there
-
-            // Wait for Warp to become frontmost
-            let start = Date()
-            while Date().timeIntervalSince(start) < 1.0 {
-                if NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "dev.warp.Warp-Stable" { break }
-                Thread.sleep(forTimeInterval: 0.025)
-            }
-
-            // Directly jump to tab N+1 (Warp uses ⌘1-⌘9 for tabs 1-9)
-            let tabNumber = targetIndex + 1  // 1-based for keyboard shortcut
-            if tabNumber >= 1 && tabNumber <= 9 {
-                let script = """
-                tell application "System Events"
-                    tell process "Warp"
-                        keystroke "\(tabNumber)" using command down
-                    end tell
-                end tell
-                """
-                runAppleScript(script)
-            }
+            postKeystrokeToPid(pid: warpPid, keyCode: kc, commandDown: true)
+            logger.info("[WarpJump] CGEventPostToPid sent ⌘\(tabNumber) to PID \(warpPid)")
         }
     }
 
+
     /// Find the 0-based tab index for a CWD in Warp's SQLite.
     private static func warpTabIndex(forCwd cwd: String) -> Int? {
-        guard let db = warpOpenDB() else { return nil }
+        guard let db = warpOpenDB() else {
+            logger.error("[WarpJump] Failed to open Warp SQLite DB at \(warpDBPath, privacy: .public)")
+            return nil
+        }
         defer { sqlite3_close(db) }
 
         let resolved = URL(fileURLWithPath: cwd).resolvingSymlinksInPath().path
         let cwds = Array(Set([cwd, resolved]))
+        logger.info("[WarpJump] Searching SQLite for CWDs: \(cwds, privacy: .public)")
 
         for c in cwds {
+            // Deprioritize the currently active tab so we jump to a DIFFERENT tab
+            // with the same CWD. Among non-active tabs, prefer the oldest pane (ASC)
+            // which is typically where the long-running session lives.
             let sql = """
             SELECT t.id - (SELECT MIN(t2.id) FROM tabs t2 WHERE t2.window_id = t.window_id) as tab_index
             FROM terminal_panes tp
             JOIN pane_nodes pn ON pn.id = tp.id
             JOIN tabs t ON t.id = pn.tab_id
+            JOIN windows w ON w.id = t.window_id
             WHERE tp.cwd = ?
-            ORDER BY tp.id DESC LIMIT 1
+            ORDER BY
+              CASE WHEN (t.id - (SELECT MIN(t2.id) FROM tabs t2 WHERE t2.window_id = t.window_id)) = w.active_tab_index
+                   THEN 1 ELSE 0 END,
+              tp.id ASC
+            LIMIT 1
             """
             var stmt: OpaquePointer?
-            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { continue }
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+                logger.error("[WarpJump] SQL prepare failed for cwd=\(c, privacy: .public)")
+                continue
+            }
             defer { sqlite3_finalize(stmt) }
             let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
             sqlite3_bind_text(stmt, 1, c, -1, SQLITE_TRANSIENT)
             if sqlite3_step(stmt) == SQLITE_ROW {
-                return Int(sqlite3_column_int(stmt, 0))
+                let idx = Int(sqlite3_column_int(stmt, 0))
+                logger.info("[WarpJump] Found match: cwd=\(c, privacy: .public) → tab_index=\(idx)")
+                return idx
+            } else {
+                logger.info("[WarpJump] No match for cwd=\(c, privacy: .public)")
             }
         }
+
+        // Dump all pane CWDs for debugging
+        let dumpSql = "SELECT tp.cwd FROM terminal_panes tp LIMIT 20"
+        var dumpStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, dumpSql, -1, &dumpStmt, nil) == SQLITE_OK {
+            var allCwds: [String] = []
+            while sqlite3_step(dumpStmt) == SQLITE_ROW {
+                if let cStr = sqlite3_column_text(dumpStmt, 0) {
+                    allCwds.append(String(cString: cStr))
+                }
+            }
+            sqlite3_finalize(dumpStmt)
+            logger.info("[WarpJump] All pane CWDs in DB: \(allCwds, privacy: .public)")
+        }
+
         return nil
     }
 
@@ -419,6 +495,34 @@ struct TerminalActivator {
             }
         }
         return "Terminal"
+    }
+
+    /// Post a keystroke directly to a specific PID using CGEventPostToPid.
+    /// The function is "obsoleted" in Swift headers but still works — called via dlsym.
+    private static func postKeystrokeToPid(pid: pid_t, keyCode: UInt16, commandDown: Bool) {
+        typealias PostToPidFn = @convention(c) (pid_t, CGEvent?) -> Void
+
+        guard let cgLib = dlopen("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", RTLD_LAZY),
+              let sym = dlsym(cgLib, "CGEventPostToPid") else {
+            logger.error("[WarpJump] dlsym CGEventPostToPid failed")
+            return
+        }
+        let postToPid = unsafeBitCast(sym, to: PostToPidFn.self)
+
+        let src = CGEventSource(stateID: .combinedSessionState)
+        guard let keyDown = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: src, virtualKey: keyCode, keyDown: false) else {
+            logger.error("[WarpJump] Failed to create CGEvent")
+            return
+        }
+
+        if commandDown {
+            keyDown.flags = .maskCommand
+            keyUp.flags = .maskCommand
+        }
+
+        postToPid(pid, keyDown)
+        postToPid(pid, keyUp)
     }
 
     private static func runAppleScript(_ source: String) {
