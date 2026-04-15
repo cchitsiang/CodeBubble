@@ -1,5 +1,6 @@
 import AppKit
 import CodeBubbleCore
+import SQLite3
 
 /// Activates the terminal window/tab associated with a session.
 /// Since we no longer have terminal metadata from hooks, this uses CWD-based
